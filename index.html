@@ -1,0 +1,589 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KMLB Model Guidance</title>
+<meta name="description" content="GFS MOS, NAM MOS, NBM and ECMWF guidance for Melbourne, FL (KMLB) side by side, updated every 6 hours.">
+<style>
+/* Layout: one centered column of cards; tokens below drive every color and size. */
+:root{
+  --color-bg:#f6f7f9;--color-panel:#ffffff;--color-fg:#1b1f24;--color-fg-muted:#5c6570;--color-border-line:#dde1e6;
+  --color-ok:#1f7a4d;--color-warn:#b4570d;--color-bad:#c0362c;
+  --cds-surface-popover:#ffffff;--cds-border:#d3d8de;--cds-shadow-popover:0 4px 16px rgba(20,30,40,.12);--cds-text-secondary:#5c6570;
+  --cds-chart-grid:#e7eaee;--cds-chart-axis:#aab2bb;--cds-chart-reference:#8a939d;
+  --skel:#e9ecf0;
+  --font-anthropic-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --font-anthropic-serif:Georgia,"Times New Roman",serif;
+  --cds-font-size-caption:12px;--cds-font-size-body:14px;--cds-font-size-heading:16px;--cds-font-size-title:26px;--cds-font-weight-medium:600;
+  --cds-gap-xs:4px;--cds-gap-sm:8px;--cds-gap-md:16px;--cds-gap-lg:24px;
+  --cds-pad-xs:4px;--cds-pad-sm:8px;--cds-pad-lg:16px;--cds-radius:8px;--cds-dur-slow:.3s;
+}
+@media (prefers-color-scheme: dark){:root{
+  --color-bg:#121519;--color-panel:#1a1e23;--color-fg:#e6e9ed;--color-fg-muted:#9aa3ad;--color-border-line:#2c3239;
+  --color-ok:#4cc38a;--color-warn:#f0a050;--color-bad:#ef6b5f;
+  --cds-surface-popover:#22272d;--cds-border:#363d45;--cds-shadow-popover:0 4px 16px rgba(0,0,0,.45);--cds-text-secondary:#9aa3ad;
+  --cds-chart-grid:#262c32;--cds-chart-axis:#4a525b;--cds-chart-reference:#6b747e;--skel:#242a30;color-scheme:dark;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--color-bg);color:var(--color-fg);font:14px/1.45 var(--font-anthropic-sans)}
+.page{max-width:1240px;margin:0 auto;padding-block:24px 40px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.dash-skeleton:empty{background:var(--skel);border-radius:var(--cds-radius);animation:sk 1.4s ease-in-out infinite}
+@keyframes sk{50%{opacity:.55}}
+@media (prefers-reduced-motion:reduce){.dash-skeleton:empty{animation:none}}
+.kg-foot{margin-top:var(--cds-gap-lg);color:var(--color-fg-muted);font-size:var(--cds-font-size-caption);display:grid;gap:4px}
+.kg-foot a{color:inherit}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script>
+// Minimal stand-in for the Claude dashboard runtime: loads data/*.json, runs calcs and redraws.
+window.dash = (() => {
+  const store = {}, calcs = {}, draws = [];
+  const colors = ['#3566c8', '#e07b39', '#2e9e6a', '#b04ca0', '#1f9e9e', '#c98a16', '#7a5fd0', '#8a8f2d'];
+  const data = (id) => store[id] || {status: 'loading', data: []};
+  const calc = (id, c) => { calcs[id] = c; };
+  const compute = () => {
+    for (const [id, c] of Object.entries(calcs)) {
+      const ins = c.inputs.map((i) => data(i));
+      if (ins.every((x) => x.status === 'ok')) {
+        try { store[id] = {status: 'ok', data: c.fn(...ins.map((x) => x.data))}; }
+        catch (e) { console.error(id, e); store[id] = {status: 'error', data: []}; }
+      } else if (ins.some((x) => x.status === 'error')) store[id] = {status: 'error', data: []};
+    }
+  };
+  const redraw = () => draws.forEach(([name, fn]) =>
+    document.querySelectorAll(`[data-draw="${name}"]`).forEach((el) => { try { fn(el); } catch (e) { console.error(name, e); } }));
+  const draw = (name, fn) => { draws.push([name, fn]); };
+  const load = async (id, url) => {
+    try {
+      const r = await fetch(url, {cache: 'no-store'});
+      if (!r.ok) throw new Error(r.status);
+      const j = await r.json();
+      store[id] = {status: 'ok', data: j.rows || j};
+    } catch (e) { console.error(url, e); store[id] = {status: 'error', data: []}; }
+  };
+  let w = 0;
+  window.addEventListener('resize', () => { if (Math.abs(window.innerWidth - w) > 4) { w = window.innerWidth; clearTimeout(window.__rt); window.__rt = setTimeout(redraw, 150); } });
+  const start = async () => {
+    w = window.innerWidth;
+    redraw();
+    await Promise.all([load('models', 'data/models.json'), load('previous', 'data/previous.json'), load('meta', 'data/meta.json')]);
+    compute();
+    redraw();
+  };
+  return {colors, data, calc, draw, start};
+})();
+</script>
+</head>
+<body>
+<div class="page">
+<style>
+.kg{display:grid;gap:var(--cds-gap-lg);font-family:var(--font-anthropic-sans)}
+.kg-head{display:grid;gap:var(--cds-gap-xs)}
+.kg-title{font-family:var(--font-anthropic-serif);font-weight:400;font-size:var(--cds-font-size-title);margin:0;text-wrap:balance}
+.kg-sub{margin:0;font-size:var(--cds-font-size-body);max-width:72ch}
+.kg-runs{display:flex;flex-wrap:wrap;gap:var(--cds-gap-sm) var(--cds-gap-md);font-size:var(--cds-font-size-caption);color:var(--color-fg-muted)}
+.kg-run{display:inline-flex;align-items:center;gap:.4rem;font-variant-numeric:tabular-nums}
+.kg-sw{display:inline-block;width:.85rem;height:.25rem;border-radius:2px}
+.kg-cards{display:grid;gap:var(--cds-gap-md);grid-template-columns:repeat(auto-fit,minmax(min(100%,22rem),1fr))}
+.kg-card{background:var(--color-panel);border:1px solid var(--color-border-line);border-radius:var(--cds-radius);padding:var(--cds-pad-lg);min-width:0;display:grid;gap:var(--cds-gap-sm);align-content:start}
+.kg-card h2{font-size:var(--cds-font-size-heading);font-weight:var(--cds-font-weight-medium);margin:0}
+.kg-note{color:var(--color-fg-muted);font-size:var(--cds-font-size-caption);margin:0;max-width:80ch}
+.kg-chart{position:relative;min-height:240px}
+.kg-chart svg{display:block}
+.kg-tip{position:absolute;pointer-events:none;background:var(--cds-surface-popover);border:1px solid var(--cds-border);border-radius:var(--cds-radius);box-shadow:var(--cds-shadow-popover);padding:var(--cds-pad-xs) var(--cds-pad-sm);font-size:var(--cds-font-size-caption);font-variant-numeric:tabular-nums;white-space:nowrap;z-index:2}
+.kg-tip .kg-tip-h{color:var(--cds-text-secondary)}
+.kg-tip .kg-tip-r{display:flex;align-items:center;gap:.4rem}
+.kg-tip .kg-tip-r b{font-weight:600;margin-left:auto;padding-left:.75rem}
+.kg-scroll{overflow-x:auto;min-height:320px}
+.kg-bul{border-collapse:separate;border-spacing:0;font-family:Courier,"Courier New",monospace;font-size:13.3333px;line-height:normal;font-weight:400}
+.kg-bul th,.kg-bul td{padding:0;min-width:3ch;text-align:right;white-space:pre;font:inherit}
+.kg-bul thead th{color:var(--color-fg-muted);font-weight:400}
+.kg-bul thead tr.kg-days th{text-align:left;color:var(--color-fg);border-left:1px solid var(--color-border-line);padding-left:1ch}
+.kg-bul thead tr.kg-days th.kg-blank{border-left:none}
+.kg-bul td.kg-day0,.kg-bul th.kg-day0{border-left:1px solid var(--color-border-line)}
+.kg-bul .kg-el,.kg-bul .kg-mod{position:sticky;background:var(--color-panel);text-align:left;z-index:1}
+.kg-bul .kg-el{left:0;color:var(--color-fg);min-width:4ch;padding-left:1ch}
+.kg-bul .kg-mod{left:5ch;min-width:4ch;color:var(--color-fg-muted);padding-right:1ch;border-right:1px solid var(--color-border-line)}
+.kg-bul tbody tr.kg-first td{border-top:1px solid var(--color-border-line)}
+.kg-bul td.kg-out{color:var(--color-warn);text-decoration:underline;text-underline-offset:2px}
+.kg-bul td.kg-empty{color:var(--color-fg-muted)}
+.kg-defs{display:grid;gap:var(--cds-gap-xs);margin:0;padding:0;list-style:none;font-size:var(--cds-font-size-caption);color:var(--color-fg-muted)}
+.kg-defs b{color:var(--color-fg);font-weight:400;font-family:Courier,"Courier New",monospace;font-size:13.3333px}
+[data-dash-source-state=refreshing]{opacity:.5;transition:opacity var(--cds-dur-slow)}
+[data-dash-source-state=empty]{color:transparent}
+.kg-fail{display:flex;align-items:center;justify-content:center;gap:.5rem;min-height:inherit;color:var(--color-fg-muted);font-size:var(--cds-font-size-caption)}
+.kg-fail::before{content:"";width:.375rem;height:.375rem;border-radius:50%;background:var(--color-bad)}
+.kg-chg-grid{display:grid;gap:var(--cds-gap-md);grid-template-columns:repeat(auto-fit,minmax(min(100%,26rem),1fr))}
+.kg-chg{position:relative;min-height:200px}
+.kg-chg svg{display:block}
+.kg-sec{display:grid;gap:var(--cds-gap-sm)}
+.kg-sec h2.kg-sec-h{font-size:var(--cds-font-size-heading);font-weight:var(--cds-font-weight-medium);margin:0}
+.kg-sw-inc{background:var(--kg-inc)}.kg-sw-dec{background:var(--kg-dec)}
+.kg-sw-sq{width:.7rem;height:.7rem;border-radius:2px}
+</style>
+
+<div class="kg">
+  <header class="kg-head" id="summary">
+    <h1 class="kg-title">KMLB model guidance</h1>
+    <p class="kg-sub">Next max temperature (ending <b data-draw="xn-when" data-source="nextmax" data-field="when">—</b>): <b data-draw="xn-lo" data-source="nextmax" data-field="lo">—</b>–<b data-draw="xn-hi" data-source="nextmax" data-field="hi">—</b>°F across the four models. Wettest 12-hour period ends <b data-draw="pop-when" data-source="wettest" data-field="when">—</b>, with rain chances of <b data-draw="pop-lo" data-source="wettest" data-field="lo">—</b>–<b data-draw="pop-hi" data-source="wettest" data-field="hi">—</b>%.</p>
+    <div class="kg-runs" data-draw="runs" data-source="models"></div>
+  </header>
+
+  <div class="kg-cards">
+    <section class="kg-card" id="wind-speed">
+      <h2>Wind speed</h2>
+      <p class="kg-note">3-hourly sustained 10 m wind, knots, valid times in UTC.</p>
+      <div class="kg-legend kg-runs">
+        <span class="kg-run"><i class="kg-sw" data-model="0"></i>GFS MOS</span>
+        <span class="kg-run"><i class="kg-sw" data-model="1"></i>NAM MOS</span>
+        <span class="kg-run"><i class="kg-sw" data-model="2"></i>NBM</span>
+        <span class="kg-run"><i class="kg-sw" data-model="3"></i>ECMWF</span>
+      </div>
+      <div class="kg-chart dash-skeleton" data-draw="tchart" data-source="models"></div>
+    </section>
+    <section class="kg-card" id="rain-chances">
+      <h2>12-hour rain chances</h2>
+      <p class="kg-note">P12 for the 12 hours ending at each 00Z and 12Z, in percent.</p>
+      <div class="kg-legend kg-runs">
+        <span class="kg-run"><i class="kg-sw" data-model="0"></i>GFS MOS</span>
+        <span class="kg-run"><i class="kg-sw" data-model="1"></i>NAM MOS</span>
+        <span class="kg-run"><i class="kg-sw" data-model="2"></i>NBM</span>
+        <span class="kg-run"><i class="kg-sw" data-model="3"></i>ECMWF</span>
+      </div>
+      <div class="kg-chart dash-skeleton" data-draw="pchart" data-source="models"></div>
+    </section>
+  </div>
+
+  <section class="kg-sec" id="run-changes">
+    <h2 class="kg-sec-h">Change since 12 hours earlier</h2>
+    <p class="kg-note">Each row is one model's latest run minus its run from 12 hours earlier, at the same valid time. Bars above the line mean the newer run is higher, and the number on each bar is the change for that time.</p>
+    <div class="kg-runs">
+      <span class="kg-run"><i class="kg-sw kg-sw-sq kg-sw-inc"></i>Increase</span>
+      <span class="kg-run"><i class="kg-sw kg-sw-sq kg-sw-dec"></i>Decrease</span>
+    </div>
+    <div class="kg-chg-grid">
+      <section class="kg-card" id="change-wind">
+        <h2>Wind speed</h2>
+        <p class="kg-note">Sustained 10 m wind, knots, every 3 hours.</p>
+        <div class="kg-chg dash-skeleton" data-draw="chg" data-element="WSP" data-source="changes"></div>
+      </section>
+      <section class="kg-card" id="change-gusts">
+        <h2>Wind gusts</h2>
+        <p class="kg-note">Gusts, knots. NBM and ECMWF only, since GFS and NAM MOS don't forecast gusts.</p>
+        <div class="kg-chg dash-skeleton" data-draw="chg" data-element="GST" data-source="changes"></div>
+      </section>
+      <section class="kg-card" id="change-p12">
+        <h2>12-hour rain chances</h2>
+        <p class="kg-note">P12, percentage points, for the 12 hours ending at each 00Z and 12Z. ECMWF is left out because earlier runs of its ensemble aren't kept.</p>
+        <div class="kg-chg dash-skeleton" data-draw="chg" data-element="P12" data-source="changes"></div>
+      </section>
+    </div>
+  </section>
+
+  <section class="kg-card" id="bulletin">
+    <h2>Combined bulletin</h2>
+    <p class="kg-note">All four models in MOS layout, one row per model under each element. Temperatures more than 3°F from the other models' median are highlighted. Rain and thunder chances are shaded by value.</p>
+    <div class="kg-scroll dash-skeleton" data-draw="grid"></div>
+    <ul class="kg-defs">
+      <li><b>X/N</b> max (at 00Z) and min (at 12Z), °F. <b>CLD</b> CL FW SC BK OV. <b>WDR</b> tens of degrees. <b>WSP</b>, <b>GST</b> knots.</li>
+      <li><b>P06</b>, <b>P12</b> chance of at least .01 in, percent. For ECMWF this is the share of its 51 ensemble members reaching .05 in, since the raw members drizzle a few hundredths almost every period.</li>
+      <li><b>Q06</b>, <b>Q12</b> QPF category: 0 none, 1 .01–.09, 2 .10–.24, 3 .25–.49, 4 .50–.99, 5 1.00–1.99, 6 2.00+ in.</li>
+      <li><b>T06</b>, <b>T12</b> thunder chance in percent; MOS also shows the severe chance after the slash. <b>CAP</b> ECMWF max CAPE, hundreds of J/kg; it stands in for thunder, which ECMWF's open data lacks.</li>
+      <li><b>CIG</b> ceiling category 1–8 and <b>VIS</b> visibility category 1–7, as in MOS. ECMWF has neither.</li>
+      <li>GFS and NAM are MOS guidance; NBM is the National Blend; ECMWF is raw IFS model output, not statistically corrected.</li>
+    </ul>
+  </section>
+</div>
+  <footer class="kg-foot">
+    <div>Last updated <b data-draw="updated">—</b>. Refreshes automatically every 6 hours.</div>
+    <div>Sources: <a href="https://www.weather.gov/mdl/mos_getbull">NWS MDL MOS bulletins</a> (GFS MAV, NAM MET), <a href="https://www.weather.gov/mdl/nbm_text">NBM text bulletins</a> (NBS), and ECMWF IFS 0.25° and ENS via <a href="https://open-meteo.com/">Open-Meteo</a> (CC BY 4.0). ECMWF values are raw model output, not MOS.</div>
+  </footer>
+</div>
+
+<script>
+window.KG = (() => {
+  const MODELS = ['GFS MOS', 'NAM MOS', 'NBM', 'ECMWF'];
+  const SHORT = {'GFS MOS': 'GFS', 'NAM MOS': 'NAM', 'NBM': 'NBM', 'ECMWF': 'ECM'};
+  const ELEMENTS = [
+    ['XN', 'X/N'], ['TMP', 'TMP'], ['DPT', 'DPT'], ['CLD', 'CLD'], ['WDR', 'WDR'], ['WSP', 'WSP'], ['GST', 'GST'],
+    ['P06', 'P06'], ['P12', 'P12'], ['Q06', 'Q06'], ['Q12', 'Q12'], ['T06', 'T06'], ['T12', 'T12'], ['CAP', 'CAP'],
+    ['TYP', 'TYP'], ['CIG', 'CIG'], ['VIS', 'VIS']
+  ];
+  const color = (m) => dash.colors[MODELS.indexOf(m) % dash.colors.length];
+  // columns: 3-hourly valid times from the latest model start, out to 84 h
+  const columns = (rows) => {
+    const firsts = MODELS.map((m) => d3.min(rows.filter((r) => r.model === m), (r) => r.valid)).filter(Boolean);
+    const start = d3.max(firsts);
+    const end = new Date(Date.parse(start) + 84 * 3600e3).toISOString().slice(0, 16) + 'Z';
+    return Array.from(new Set(rows.map((r) => r.valid))).filter((v) => v >= start && v <= end && +v.slice(11, 13) % 3 === 0).sort();
+  };
+  const fail = (el) => { el.replaceChildren(); const d = document.createElement('div'); d.className = 'kg-fail'; d.textContent = 'Failed to load'; el.append(d); };
+  return {MODELS, SHORT, ELEMENTS, color, columns, fail};
+})();
+
+document.querySelectorAll('.kg-sw[data-model]').forEach((sw) => {
+  sw.style.background = dash.colors[+sw.dataset.model % dash.colors.length];
+});
+
+dash.calc('nextmax', {
+  inputs: ['models'],
+  title: 'Next max temperature',
+  description: 'Lowest and highest forecast max (X/N at the first 00Z that at least three models share) across the four models.',
+  fn: (models) => {
+    const firsts = ['GFS MOS', 'NAM MOS', 'NBM', 'ECMWF'].map((m) => models.filter((r) => r.model === m).map((r) => r.valid).sort()[0]).filter(Boolean).sort();
+    const start = firsts[firsts.length - 1];
+    const xn = models.filter((r) => r.element === 'XN' && r.valid >= start && r.valid.slice(11, 13) === '00');
+    const when = xn.map((r) => r.valid).sort().find((t) => xn.filter((r) => r.valid === t).length >= 3);
+    const vals = xn.filter((r) => r.valid === when).map((r) => Number(r.value));
+    if (!when) return [];
+    const d = new Date(when);
+    return [{when: d.toUTCString().slice(0, 3) + ' ' + when.slice(11, 13) + 'Z', lo: Math.min(...vals), hi: Math.max(...vals)}];
+  }
+});
+
+dash.calc('wettest', {
+  inputs: ['models'],
+  title: 'Wettest 12-hour period',
+  description: 'The P12 period with the highest average chance across the models, and the range between them.',
+  fn: (models) => {
+    const firsts = ['GFS MOS', 'NAM MOS', 'NBM', 'ECMWF'].map((m) => models.filter((r) => r.model === m).map((r) => r.valid).sort()[0]).filter(Boolean).sort();
+    const start = firsts[firsts.length - 1];
+    const byTime = {};
+    models.filter((r) => r.element === 'P12' && r.valid >= start).forEach((r) => { (byTime[r.valid] = byTime[r.valid] || []).push(Number(r.value)); });
+    let best = null;
+    Object.entries(byTime).forEach(([t, v]) => {
+      if (v.length < 3) return;
+      const mean = v.reduce((a, b) => a + b, 0) / v.length;
+      if (!best || mean > best.mean) best = {t, v, mean};
+    });
+    if (!best) return [];
+    const d = new Date(best.t);
+    return [{when: d.toUTCString().slice(0, 3) + ' ' + best.t.slice(11, 13) + 'Z', lo: Math.min(...best.v), hi: Math.max(...best.v)}];
+  }
+});
+
+const kgText = (name, src, field) => dash.draw(name, (el) => {
+  const d = dash.data(src);
+  el.textContent = d.status === 'ok' && d.data[0] ? String(d.data[0][field]) : '—';
+});
+kgText('xn-when', 'nextmax', 'when'); kgText('xn-lo', 'nextmax', 'lo'); kgText('xn-hi', 'nextmax', 'hi');
+kgText('pop-when', 'wettest', 'when'); kgText('pop-lo', 'wettest', 'lo'); kgText('pop-hi', 'wettest', 'hi');
+
+dash.draw('runs', (el) => {
+  const d = dash.data('models');
+  el.replaceChildren();
+  if (d.status !== 'ok') { el.textContent = '—'; return; }
+  KG.MODELS.forEach((m) => {
+    const r = d.data.find((x) => x.model === m);
+    if (!r) return;
+    const s = document.createElement('span'); s.className = 'kg-run';
+    const sw = document.createElement('i'); sw.className = 'kg-sw'; sw.style.background = KG.color(m);
+    const t = new Date(r.run);
+    s.append(sw, `${m} ${r.run.slice(11, 13)}Z ${t.toUTCString().slice(5, 11)}`);
+    el.append(s);
+  });
+});
+</script>
+
+<script>
+// wind speed lines
+dash.draw('tchart', (el) => {
+  const d = dash.data('models');
+  el.classList.toggle('dash-skeleton', d.status === 'loading');
+  el.replaceChildren();
+  if (d.status === 'error') return KG.fail(el);
+  if (d.status !== 'ok') return;
+  const cols = KG.columns(d.data);
+  const lo = cols[0], hi = cols[cols.length - 1];
+  const rows = d.data.filter((r) => r.element === 'WSP' && r.valid >= lo && r.valid <= hi)
+    .map((r) => ({...r, t: new Date(r.valid), v: Number(r.value)}));
+  const W = el.clientWidth || 600, H = 240, m = {t: 8, r: 12, b: 24, l: 32};
+  const x = d3.scaleUtc([new Date(lo), new Date(hi)], [m.l, W - m.r]);
+  const y = d3.scaleLinear([0, d3.max(rows, (r) => r.v) || 1], [H - m.b, m.t]).nice();
+  const svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`);
+  svg.append('g').selectAll('line').data(y.ticks(5)).join('line')
+    .attr('x1', m.l).attr('x2', W - m.r).attr('y1', y).attr('y2', y).attr('stroke', 'var(--cds-chart-grid)');
+  svg.append('g').attr('transform', `translate(${m.l},0)`).call(d3.axisLeft(y).ticks(5).tickSize(0).tickPadding(6))
+    .attr('font-size', null).attr('font-family', null)
+    .call((g) => g.select('.domain').remove()).selectAll('text').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)');
+  const days = d3.utcDay.range(new Date(lo), new Date(hi)).concat([]).filter((t) => t > new Date(lo));
+  const every = W < 420 ? 2 : 1;
+  svg.append('g').attr('transform', `translate(0,${H - m.b})`)
+    .call(d3.axisBottom(x).tickValues(days.filter((_, i) => i % every === 0)).tickFormat((t) => d3.utcFormat('%a %HZ')(t)).tickSize(0).tickPadding(8))
+    .attr('font-size', null).attr('font-family', null)
+    .call((g) => g.select('.domain').attr('stroke', 'var(--cds-chart-axis)'))
+    .selectAll('text').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)');
+  const line = d3.line().x((r) => x(r.t)).y((r) => y(r.v));
+  KG.MODELS.forEach((mod) => {
+    const s = rows.filter((r) => r.model === mod).sort((a, b) => a.t - b.t);
+    svg.append('path').datum(s).attr('d', line).attr('fill', 'none').attr('stroke', KG.color(mod))
+      .attr('stroke-width', 2).attr('stroke-linejoin', 'round').attr('stroke-linecap', 'round');
+  });
+  const tip = document.createElement('div'); tip.className = 'kg-tip'; tip.hidden = true; el.append(tip);
+  const rule = svg.append('line').attr('y1', m.t).attr('y2', H - m.b).attr('stroke', 'var(--cds-chart-reference)').attr('visibility', 'hidden');
+  const times = cols.map((c) => new Date(c));
+  svg.on('pointermove', (ev) => {
+    const [px] = d3.pointer(ev);
+    const t = times[d3.minIndex(times, (c) => Math.abs(x(c) - px))];
+    const iso = t.toISOString().slice(0, 16) + 'Z';
+    const here = rows.filter((r) => r.valid === iso);
+    if (!here.length) { tip.hidden = true; rule.attr('visibility', 'hidden'); return; }
+    rule.attr('x1', x(t)).attr('x2', x(t)).attr('visibility', 'visible');
+    tip.replaceChildren();
+    const h = document.createElement('div'); h.className = 'kg-tip-h'; h.textContent = d3.utcFormat('%a %b %-d, %HZ')(t); tip.append(h);
+    KG.MODELS.forEach((mod) => {
+      const r = here.find((q) => q.model === mod); if (!r) return;
+      const row = document.createElement('div'); row.className = 'kg-tip-r';
+      const sw = document.createElement('i'); sw.className = 'kg-sw'; sw.style.background = KG.color(mod);
+      const b = document.createElement('b'); b.textContent = `${r.v} kt`;
+      row.append(sw, mod, b); tip.append(row);
+    });
+    tip.hidden = false;
+    const scale = el.clientWidth / W;
+    const left = Math.min(Math.max(x(t) * scale + 10, 0), el.clientWidth - tip.offsetWidth);
+    tip.style.left = `${x(t) * scale + 10 + tip.offsetWidth > el.clientWidth ? x(t) * scale - tip.offsetWidth - 10 : left}px`;
+    tip.style.top = '8px';
+  }).on('pointerleave', () => { tip.hidden = true; rule.attr('visibility', 'hidden'); });
+});
+
+// 12-h rain chance bars
+dash.draw('pchart', (el) => {
+  const d = dash.data('models');
+  el.classList.toggle('dash-skeleton', d.status === 'loading');
+  el.replaceChildren();
+  if (d.status === 'error') return KG.fail(el);
+  if (d.status !== 'ok') return;
+  const cols = KG.columns(d.data);
+  const lo = cols[0], hi = cols[cols.length - 1];
+  const rows = d.data.filter((r) => r.element === 'P12' && r.valid >= lo && r.valid <= hi).map((r) => ({...r, v: Number(r.value)}));
+  const periods = Array.from(new Set(rows.map((r) => r.valid))).sort();
+  const W = el.clientWidth || 600, H = 240, m = {t: 8, r: 8, b: 24, l: 32};
+  const x0 = d3.scaleBand(periods, [m.l, W - m.r]).paddingInner(0.25).paddingOuter(0.1);
+  const x1 = d3.scaleBand(KG.MODELS, [0, x0.bandwidth()]).padding(0.08);
+  const y = d3.scaleLinear([0, 100], [H - m.b, m.t]);
+  const svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`);
+  svg.append('g').selectAll('line').data([0, 25, 50, 75, 100]).join('line')
+    .attr('x1', m.l).attr('x2', W - m.r).attr('y1', y).attr('y2', y).attr('stroke', 'var(--cds-chart-grid)');
+  svg.append('g').attr('transform', `translate(${m.l},0)`).call(d3.axisLeft(y).tickValues([0, 25, 50, 75, 100]).tickSize(0).tickPadding(6))
+    .attr('font-size', null).attr('font-family', null)
+    .call((g) => g.select('.domain').remove()).selectAll('text').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)');
+  const every = x0.bandwidth() < 36 ? 2 : 1;
+  svg.append('g').attr('transform', `translate(0,${H - m.b})`)
+    .call(d3.axisBottom(x0).tickValues(periods.filter((_, i) => i % every === 0)).tickFormat((t) => d3.utcFormat('%a %HZ')(new Date(t))).tickSize(0).tickPadding(8))
+    .attr('font-size', null).attr('font-family', null)
+    .call((g) => g.select('.domain').attr('stroke', 'var(--cds-chart-axis)'))
+    .selectAll('text').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)');
+  const tip = document.createElement('div'); tip.className = 'kg-tip'; tip.hidden = true; el.append(tip);
+  const scale = () => el.clientWidth / W;
+  svg.append('g').selectAll('rect').data(rows).join('rect')
+    .attr('x', (r) => x0(r.valid) + x1(r.model)).attr('width', x1.bandwidth())
+    .attr('y', (r) => y(r.v)).attr('height', (r) => y(0) - y(r.v)).attr('rx', 2)
+    .attr('fill', (r) => KG.color(r.model))
+    .on('pointerenter', (ev, r) => {
+      tip.replaceChildren();
+      const h = document.createElement('div'); h.className = 'kg-tip-h'; h.textContent = '12 h ending ' + d3.utcFormat('%a %b %-d, %HZ')(new Date(r.valid)); tip.append(h);
+      rows.filter((q) => q.valid === r.valid).forEach((q) => {
+        const row = document.createElement('div'); row.className = 'kg-tip-r';
+        const sw = document.createElement('i'); sw.className = 'kg-sw'; sw.style.background = KG.color(q.model);
+        const b = document.createElement('b'); b.textContent = `${q.v}%`;
+        row.append(sw, q.model, b); tip.append(row);
+      });
+      tip.hidden = false;
+      const cx = (x0(r.valid) + x0.bandwidth()) * scale();
+      tip.style.left = `${cx + 8 + tip.offsetWidth > el.clientWidth ? x0(r.valid) * scale() - tip.offsetWidth - 8 : cx + 8}px`;
+      tip.style.top = '8px';
+    })
+    .on('pointerleave', () => { tip.hidden = true; });
+});
+</script>
+
+<script>
+// combined MOS-style bulletin
+dash.draw('grid', (el) => {
+  const d = dash.data('models');
+  el.classList.toggle('dash-skeleton', d.status === 'loading');
+  el.replaceChildren();
+  if (d.status === 'error') return KG.fail(el);
+  if (d.status !== 'ok') return;
+  const cols = KG.columns(d.data);
+  const idx = new Map(d.data.map((r) => [r.model + '|' + r.element + '|' + r.valid, r]));
+  const table = document.createElement('table'); table.className = 'kg-bul';
+  const thead = table.createTHead();
+  // date row
+  const dr = thead.insertRow(); dr.className = 'kg-days';
+  const blank = document.createElement('th'); blank.colSpan = 2; blank.className = 'kg-blank kg-el'; dr.append(blank);
+  let i = 0;
+  while (i < cols.length) {
+    const day = cols[i].slice(0, 10);
+    let n = 0; while (i + n < cols.length && cols[i + n].slice(0, 10) === day) n++;
+    const th = document.createElement('th'); th.colSpan = n;
+    th.textContent = d3.utcFormat('%a %b %-d')(new Date(cols[i]));
+    dr.append(th); i += n;
+  }
+  const hr = thead.insertRow();
+  const h1 = document.createElement('th'); h1.className = 'kg-el'; h1.textContent = 'UTC';
+  const h2 = document.createElement('th'); h2.className = 'kg-mod';
+  hr.append(h1, h2);
+  cols.forEach((c, j) => {
+    const th = document.createElement('th'); th.textContent = c.slice(11, 13);
+    if (j > 0 && c.slice(0, 10) !== cols[j - 1].slice(0, 10)) th.className = 'kg-day0';
+    hr.append(th);
+  });
+  const tbody = table.createTBody();
+  const shade = (v) => `color-mix(in srgb, ${dash.colors[0]} ${Math.round(Math.min(v, 100) * 0.45)}%, transparent)`;
+  KG.ELEMENTS.forEach(([el_, label]) => {
+    const mods = KG.MODELS.filter((mo) => cols.some((c) => idx.has(mo + '|' + el_ + '|' + c)));
+    if (!mods.length) return;
+    // median per column for temperature outliers
+    const med = {};
+    if (el_ === 'TMP' || el_ === 'XN' || el_ === 'DPT') cols.forEach((c) => {
+      const v = mods.map((mo) => idx.get(mo + '|' + el_ + '|' + c)).filter(Boolean).map((r) => Number(r.value));
+      if (v.length >= 3) med[c] = v;
+    });
+    mods.forEach((mo, k) => {
+      const tr = tbody.insertRow(); if (k === 0) tr.className = 'kg-first';
+      const a = document.createElement('td'); a.className = 'kg-el'; a.textContent = k === 0 ? label : '';
+      const b = document.createElement('td'); b.className = 'kg-mod'; b.textContent = KG.SHORT[mo];
+      b.style.color = KG.color(mo);
+      tr.append(a, b);
+      cols.forEach((c, j) => {
+        const td = document.createElement('td');
+        if (j > 0 && c.slice(0, 10) !== cols[j - 1].slice(0, 10)) td.classList.add('kg-day0');
+        const r = idx.get(mo + '|' + el_ + '|' + c);
+        if (r) {
+          td.textContent = r.text;
+          td.dataset.source = 'models';
+          td.dataset.field = 'text';
+          td.dataset.where = `model=${encodeURIComponent(mo).replace(/%20/g, ' ')}&valid=${c}&element=${el_}`;
+          const v = Number(r.value);
+          if (['P06', 'P12', 'T06', 'T12'].includes(el_) && Number.isFinite(v) && v > 0) td.style.background = shade(v);
+          if (med[c]) {
+            const others = med[c].slice(); const me = others.splice(mods.filter((mm) => idx.has(mm + '|' + el_ + '|' + c)).indexOf(mo), 1)[0];
+            const sorted = others.sort((p, q) => p - q);
+            const mid = sorted.length % 2 ? sorted[(sorted.length - 1) / 2] : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2;
+            if (Math.abs(me - mid) > 3) td.classList.add('kg-out');
+          }
+        }
+        tr.append(td);
+      });
+    });
+  });
+  el.append(table);
+});
+</script>
+
+<script>
+document.querySelectorAll('#dash-root .kg-sw-inc, .kg-sw-inc').forEach((e) => { e.style.background = dash.colors[4 % dash.colors.length]; });
+document.querySelectorAll('.kg-sw-dec').forEach((e) => { e.style.background = dash.colors[5 % dash.colors.length]; });
+
+dash.calc('changes', {
+  inputs: ['models', 'previous'],
+  title: 'Change from 12 hours earlier',
+  description: 'Latest run minus the run 12 hours earlier, per model, element and valid time, for wind, gusts and P12.',
+  fn: (models, previous) => {
+    const key = (r) => r.model + '|' + r.element + '|' + r.valid;
+    const before = new Map(previous.map((r) => [key(r), r]));
+    return models
+      .filter((r) => ['WSP', 'GST', 'P12'].includes(r.element) && before.has(key(r)))
+      .map((r) => {
+        const b = before.get(key(r));
+        return {key: key(r), model: r.model, element: r.element, valid: r.valid,
+          now: Number(r.value), before: Number(b.value), change: Number(r.value) - Number(b.value),
+          run_now: r.run, run_before: b.run};
+      });
+  }
+});
+
+dash.draw('chg', (el) => {
+  const d = dash.data('changes');
+  el.classList.toggle('dash-skeleton', d.status === 'loading');
+  el.replaceChildren();
+  if (d.status === 'error') return KG.fail(el);
+  if (d.status !== 'ok') return;
+  const elem = el.dataset.element;
+  const unit = elem === 'WSP' || elem === 'GST' ? ' kt' : '%';
+  const dunit = elem === 'WSP' || elem === 'GST' ? ' kt' : ' pts';
+  const rows = d.data.filter((r) => r.element === elem);
+  if (!rows.length) return;
+  const order = ['GFS MOS', 'GFS MEX', 'NAM MOS', 'NBM', 'ECMWF'];
+  const label = {'GFS MOS': 'GFS MOS', 'GFS MEX': 'GFS MEX', 'NAM MOS': 'NAM MOS', 'NBM': 'NBM', 'ECMWF': 'ECMWF'};
+  const mods = order.filter((m) => rows.some((r) => r.model === m));
+  const times = Array.from(new Set(rows.map((r) => r.valid))).sort();
+  const W = el.clientWidth || 500, rowH = 96, head = 16, axisH = 22, lab = 14;
+  const H = mods.length * rowH + axisH;
+  const m = {l: 6, r: 6};
+  const x = d3.scaleBand(times, [m.l, W - m.r]).paddingInner(0.2).paddingOuter(0.05);
+  const bw = Math.min(x.bandwidth(), 32);
+  const lim = Math.max(1, d3.max(rows, (r) => Math.abs(r.change)));
+  const inc = dash.colors[4 % dash.colors.length], dec = dash.colors[5 % dash.colors.length];
+  const fmtRun = (t) => d3.utcFormat('%HZ %b %-d')(new Date(t));
+  const sign = (v) => (v > 0 ? '+' : v < 0 ? '−' : '±') + Math.abs(v);
+  const svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`);
+  const tip = document.createElement('div'); tip.className = 'kg-tip'; tip.hidden = true; el.append(tip);
+  mods.forEach((mod, i) => {
+    const mr = rows.filter((r) => r.model === mod);
+    const top = i * rowH;
+    const y = d3.scaleLinear([-lim, lim], [top + rowH - 4 - lab, top + head + 4 + lab]);
+    const g = svg.append('g');
+    g.append('text').attr('x', m.l).attr('y', top + 12).attr('fill', 'var(--color-fg)')
+      .style('font-size', 'var(--cds-font-size-caption)').style('font-weight', '600').text(label[mod]);
+    const nameW = g.select('text').node().getComputedTextLength();
+    const runT = g.append('text').attr('x', m.l + nameW + 8).attr('y', top + 12).attr('fill', 'var(--color-fg-muted)')
+      .style('font-size', 'var(--cds-font-size-caption)')
+      .text(`${fmtRun(mr[0].run_before)} → ${fmtRun(mr[0].run_now)}`);
+    if (m.l + nameW + 8 + runT.node().getComputedTextLength() > W - m.r) {
+      runT.text(`${d3.utcFormat('%HZ')(new Date(mr[0].run_before))} → ${d3.utcFormat('%HZ')(new Date(mr[0].run_now))}`);
+      if (m.l + nameW + 8 + runT.node().getComputedTextLength() > W - m.r) runT.remove();
+    }
+    g.append('line').attr('x1', m.l).attr('x2', W - m.r).attr('y1', y(0)).attr('y2', y(0)).attr('stroke', 'var(--cds-chart-axis)');
+    g.selectAll('rect').data(mr).join('rect')
+      .attr('x', (r) => x(r.valid) + (x.bandwidth() - bw) / 2).attr('width', bw)
+      .attr('y', (r) => Math.min(y(0), y(r.change))).attr('height', (r) => Math.max(Math.abs(y(r.change) - y(0)), r.change === 0 ? 0 : 1))
+      .attr('rx', 2).attr('fill', (r) => (r.change >= 0 ? inc : dec))
+      .on('pointerenter', (ev, r) => {
+        tip.replaceChildren();
+        const h = document.createElement('div'); h.className = 'kg-tip-h';
+        h.textContent = (elem === 'P12' ? '12 h ending ' : elem === 'P24' ? '24 h ending ' : '') + d3.utcFormat('%a %b %-d, %HZ')(new Date(r.valid));
+        const a = document.createElement('div'); a.className = 'kg-tip-r';
+        const b = document.createElement('b'); b.textContent = `${sign(r.change)}${dunit}`;
+        a.append(`${label[r.model]}: ${r.before}${unit} → ${r.now}${unit}`, b);
+        tip.append(h, a); tip.hidden = false;
+        const sc = el.clientWidth / W;
+        const cx = (x(r.valid) + x.bandwidth()) * sc;
+        tip.style.left = `${cx + 8 + tip.offsetWidth > el.clientWidth ? Math.max(0, x(r.valid) * sc - tip.offsetWidth - 8) : cx + 8}px`;
+        tip.style.top = `${top * sc + 18}px`;
+      })
+      .on('pointerleave', () => { tip.hidden = true; });
+    const fs = x.bandwidth() < 14 ? 9 : x.bandwidth() < 20 ? 10 : 11;
+    if (x.bandwidth() >= 10) g.selectAll('text.kg-v').data(mr).join('text').attr('class', 'kg-v')
+      .attr('x', (r) => x(r.valid) + x.bandwidth() / 2)
+      .attr('y', (r) => (r.change >= 0 ? y(r.change) - 3 : y(r.change) + fs))
+      .attr('text-anchor', 'middle').style('font-size', `${fs}px`).style('font-variant-numeric', 'tabular-nums')
+      .attr('fill', (r) => (r.change === 0 ? 'var(--color-fg-muted)' : 'var(--color-fg)'))
+      .text((r) => (r.change > 0 ? '+' : r.change < 0 ? '−' : '') + Math.abs(r.change));
+  });
+  // shared time axis
+  const days = times.filter((t) => t.slice(11, 13) === '00');
+  const step = Math.max(1, Math.ceil(days.length * 64 / W));
+  const ax = svg.append('g').attr('transform', `translate(0,${mods.length * rowH})`);
+  ax.selectAll('text').data(days.filter((_, j) => j % step === 0)).join('text')
+    .attr('x', (t) => x(t) + x.bandwidth() / 2).attr('y', 15).attr('text-anchor', 'middle')
+    .attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)')
+    .text((t) => d3.utcFormat('%a %HZ')(new Date(t)))
+    .each(function () {
+      const w = this.getComputedTextLength(), cx = +this.getAttribute('x');
+      this.setAttribute('x', Math.min(Math.max(cx, m.l + w / 2), W - m.r - w / 2));
+    });
+});
+</script>
+<script>
+dash.draw('updated', (el) => {
+  const d = dash.data('meta');
+  el.textContent = d.status === 'ok' && d.data.generated
+    ? d3.utcFormat('%a %b %-d, %H%M UTC')(new Date(d.data.generated.replace('Z', ':00Z'))) : '—';
+});
+dash.start();
+</script>
+</body>
+</html>

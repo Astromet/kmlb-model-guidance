@@ -1,0 +1,402 @@
+#!/usr/bin/env python3
+"""
+Build the KMLB model-guidance data files.
+
+Fetches the latest and the 12-hours-earlier runs of
+  * GFS MOS (MAV) and NAM MOS (MET)        - weather.gov MDL text bulletins
+  * NBM v5 NBS                             - weather.gov MDL text bulletins
+  * ECMWF IFS 0.25 (deterministic) + ENS   - Open-Meteo
+and writes
+  data/models.json    latest runs, one row per model / element / valid time
+  data/previous.json  wind, gusts and P12 from each model's run 12 hours earlier
+  data/meta.json      when this ran and which runs it used
+
+Usage:  python3 update.py [--station KMLB --lat 28.1028 --lon -80.6453] [--out data]
+Only the Python standard library is needed.
+"""
+import argparse
+import json
+import os
+import re
+import sys
+import time
+import urllib.request
+from datetime import datetime, timedelta, timezone
+
+UA = {"User-Agent": "kmlb-model-guidance (github.com/Astromet/kmlb-model-guidance)"}
+MDL = "https://www.weather.gov/source/mdl/"
+SR = "https://single-runs-api.open-meteo.com/v1/forecast"
+ENS = "https://ensemble-api.open-meteo.com/v1/ensemble"
+ENS_META = "https://ensemble-api.open-meteo.com/data/ecmwf_ifs025_ensemble/static/meta.json"
+UTC = timezone.utc
+
+
+# ------------------------------------------------------------------ fetching
+def get(url, tries=3):
+    last = None
+    for k in range(tries):
+        try:
+            req = urllib.request.Request(url, headers=UA)
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return r.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            if e.code in (400, 404):
+                return None
+            last = e
+        except Exception as e:  # network hiccup: retry
+            last = e
+        time.sleep(3 * (k + 1))
+    print(f"warning: {url} failed: {last}", file=sys.stderr)
+    return None
+
+
+def get_json(url):
+    t = get(url)
+    return json.loads(t) if t else None
+
+
+def run_time(text):
+    m = re.search(r"(\d\d)/(\d\d)/(\d{4})\s+(\d\d)(\d\d) UTC", text[:400]) if text else None
+    return datetime(int(m[3]), int(m[1]), int(m[2]), int(m[4]), tzinfo=UTC) if m else None
+
+
+def station_block(text, sta, kind):
+    if not text:
+        return None
+    m = re.search(rf"^ {re.escape(sta)}\s+{kind}.*?(?=^\s*$|^ \w{{3,4}}\s+{kind}|\Z)", text, re.M | re.S)
+    return m.group(0).rstrip() if m else None
+
+
+def latest_and_prior(files, sta, kind):
+    """files: {cycle: text}. Returns (latest_block, prior_block) where prior is 12 h earlier."""
+    runs = {c: run_time(t) for c, t in files.items() if t}
+    if not runs:
+        return None, None
+    latest = max(runs, key=runs.get)
+    prior = next((c for c, r in runs.items() if r == runs[latest] - timedelta(hours=12)), None)
+    return (station_block(files[latest], sta, kind),
+            station_block(files[prior], sta, kind) if prior else None)
+
+
+def fetch_mos(prefix, cycles, sta, kind):
+    files = {c: get(f"{MDL}MOS/{prefix}.t{c}z") for c in cycles}
+    return latest_and_prior(files, sta, kind)
+
+
+def fetch_nbs(sta):
+    heads = {c: get(f"{MDL}NBM/blend_nbstx.t{c}z_1.txt") for c in ("01", "07", "13", "19")}
+    runs = {c: run_time(t) for c, t in heads.items() if t}
+    if not runs:
+        return None, None
+    latest = max(runs, key=runs.get)
+    prior = next((c for c, r in runs.items() if r == runs[latest] - timedelta(hours=12)), None)
+
+    def block(c):
+        for p in range(1, 6):
+            t = heads[c] if p == 1 else get(f"{MDL}NBM/blend_nbstx.t{c}z_{p}.txt")
+            b = station_block(t, sta, r"NBM V[\d.]+ NBS GUIDANCE")
+            if b:
+                return b
+        return None
+    return block(latest), (block(prior) if prior else None)
+
+
+# ------------------------------------------------------------------ conversions (MOS categories)
+def cld(p):
+    if p is None: return None
+    return "CL" if p < 6 else "FW" if p < 32 else "SC" if p < 69 else "BK" if p < 94 else "OV"
+
+
+def qcat(h):
+    """h: hundredths of an inch -> MOS QPF category."""
+    if h is None: return None
+    for lim, c in ((0, 0), (9, 1), (24, 2), (49, 3), (99, 4), (199, 5)):
+        if h <= lim: return c
+    return 6
+
+
+def cigcat(c):
+    if c is None: return None
+    if c < 0: return 8
+    for lim, cat in ((1, 1), (4, 2), (9, 3), (19, 4), (30, 5), (65, 6), (120, 7)):
+        if c <= lim: return cat
+    return 8
+
+
+def viscat(v):
+    if v is None: return None
+    m = v / 10
+    for lim, cat in ((0.5, 1), (1, 2), (2, 3), (3, 4), (6, 5)):
+        if m < lim: return cat
+    return 6 if m == 6 else 7
+
+
+# ------------------------------------------------------------------ parsing
+class Rows(list):
+    def add(self, model, run, valid, el, value, text=None):
+        if value is None and text is None:
+            return
+        self.append({"model": model, "run": run.strftime("%Y-%m-%dT%H:%MZ"),
+                     "valid": valid.strftime("%Y-%m-%dT%H:%MZ"), "element": el,
+                     "value": value, "text": text if text is not None else str(value)})
+
+
+def fields(line):
+    body = line[5:]
+    return [body[i:i + 3].strip() for i in range(0, len(body), 3)]
+
+
+def valid_times(run, hours):
+    out, t = [], run
+    for h in hours:
+        t += timedelta(hours=1)
+        while t.hour != h:
+            t += timedelta(hours=1)
+        out.append(t)
+    return out
+
+
+def num(s):
+    return int(s) if re.fullmatch(r"-?\d+", s or "") else None
+
+
+def parse_mos(block, model, rows, only=None):
+    lines = block.split("\n")
+    run = run_time(lines[0])
+    rowmap = {l[1:4].strip(): l for l in lines[1:]}
+    if "N/X" in rowmap and "X/N" not in rowmap:
+        rowmap["X/N"] = rowmap["N/X"]  # 12Z/18Z cycles list the min first
+    vt = valid_times(run, [int(x) for x in fields(rowmap["HR"]) if x])
+    n = len(vt)
+    getf = lambda k: (fields(rowmap[k]) + [""] * n)[:n] if k in rowmap else [""] * n
+    want = lambda el: only is None or el in only
+    for el, key in (("XN", "X/N"), ("TMP", "TMP"), ("DPT", "DPT"), ("WSP", "WSP"),
+                    ("P06", "P06"), ("P12", "P12"), ("Q06", "Q06"), ("Q12", "Q12"),
+                    ("CIG", "CIG"), ("VIS", "VIS")):
+        if not want(el):
+            continue
+        for t, s in zip(vt, getf(key)):
+            v = num(s)
+            if v is not None:
+                rows.add(model, run, t, el, v, s if el == "WSP" else (s.lstrip("0") or "0"))
+    if want("WDR"):
+        for t, s in zip(vt, getf("WDR")):
+            if num(s) is not None:
+                rows.add(model, run, t, "WDR", num(s) * 10, s)
+    for el in ("CLD", "TYP"):
+        if want(el):
+            for t, s in zip(vt, getf(el)):
+                if s:
+                    rows.add(model, run, t, el, None, s)
+    for key in ("T06", "T12"):
+        if not want(key):
+            continue
+        for m in re.finditer(r"(\d+)/\s*(\d+)", rowmap.get(key, "")):
+            col = (m.end() - 6) // 3
+            if 0 <= col < n:
+                rows.add(model, run, vt[col], key, int(m[1]), f"{int(m[1])}/{int(m[2])}")
+
+
+def parse_nbs(block, rows, only=None):
+    lines = block.split("\n")
+    run = run_time(lines[0])
+    rowmap = {l[1:4].strip(): l for l in lines[1:]}
+    vt = valid_times(run, [int(x) for x in fields(rowmap["UTC"]) if x])
+    n = len(vt)
+    getf = lambda k: [num(x) for x in (fields(rowmap[k]) + [""] * n)[:n]] if k in rowmap else [None] * n
+    want = lambda el: only is None or el in only
+    M = "NBM"
+    for el, key in (("XN", "TXN"), ("TMP", "TMP"), ("DPT", "DPT"), ("WSP", "WSP"), ("GST", "GST"),
+                    ("P06", "P06"), ("P12", "P12"), ("T06", "T06"), ("T12", "T12")):
+        if want(el):
+            for t, v in zip(vt, getf(key)):
+                if v is not None:
+                    rows.add(M, run, t, el, v, f"{v:02d}" if el in ("WSP", "GST") else str(v))
+    if want("WDR"):
+        for t, v in zip(vt, getf("WDR")):
+            if v is not None:
+                rows.add(M, run, t, "WDR", v * 10, f"{v:02d}")
+    if want("CLD"):
+        for t, v in zip(vt, getf("SKY")):
+            if v is not None:
+                rows.add(M, run, t, "CLD", v, cld(v))
+    for el in ("Q06", "Q12"):
+        if want(el):
+            for t, v in zip(vt, getf(el)):
+                if v is not None:
+                    rows.add(M, run, t, el, qcat(v), str(qcat(v)))
+    if want("CIG"):
+        for t, v in zip(vt, getf("CIG")):
+            if v is not None:
+                rows.add(M, run, t, "CIG", cigcat(v), str(cigcat(v)))
+    if want("VIS"):
+        for t, v in zip(vt, getf("VIS")):
+            if v is not None:
+                rows.add(M, run, t, "VIS", viscat(v), str(viscat(v)))
+    if want("TYP"):
+        pra, psn, pzr, ppl = getf("PRA"), getf("PSN"), getf("PZR"), getf("PPL")
+        for i, t in enumerate(vt):
+            b = max([(pra[i] if pra[i] is not None else -1, "R"), (psn[i] if psn[i] is not None else -1, "S"),
+                     (pzr[i] if pzr[i] is not None else -1, "Z"), (ppl[i] if ppl[i] is not None else -1, "P")])
+            if b[0] >= 0:
+                rows.add(M, run, t, "TYP", None, b[1])
+
+
+# ------------------------------------------------------------------ ECMWF
+def iso(t):
+    return t.strftime("%Y-%m-%dT%H:%M")
+
+
+def ecmwf_latest_run(lat, lon, now):
+    t = now.replace(minute=0, second=0, microsecond=0)
+    t -= timedelta(hours=t.hour % 6)
+    for _ in range(8):
+        r = get(f"{SR}?latitude={lat}&longitude={lon}&models=ecmwf_ifs025&hourly=temperature_2m"
+                f"&forecast_days=1&run={iso(t)}", tries=1)
+        if r and '"hourly"' in r:
+            return t
+        t -= timedelta(hours=6)
+    return None
+
+
+def ecmwf(lat, lon, now, rows, prev_rows, meta):
+    run = ecmwf_latest_run(lat, lon, now)
+    if not run:
+        print("warning: no ECMWF run found", file=sys.stderr)
+        return
+    q = (f"latitude={lat}&longitude={lon}&models=ecmwf_ifs025&timezone=GMT&forecast_days=5"
+         "&wind_speed_unit=kn&temperature_unit=fahrenheit&precipitation_unit=inch")
+    det = get_json(f"{SR}?{q}&run={iso(run)}&hourly=temperature_2m,dew_point_2m,cloud_cover,"
+                   "wind_direction_10m,wind_speed_10m,wind_gusts_10m,precipitation,snowfall,cape")
+    ens = get_json(f"{ENS}?latitude={lat}&longitude={lon}&models=ecmwf_ifs025&hourly=precipitation"
+                   "&precipitation_unit=inch&timezone=GMT&past_days=1&forecast_days=5")
+    em = get_json(ENS_META)
+    meta["ECMWF"] = iso(run) + "Z"
+    if em:
+        meta["ECMWF ENS"] = iso(datetime.fromtimestamp(em["last_run_initialisation_time"], UTC)) + "Z"
+    if not det:
+        return
+    H = det["hourly"]
+    idx = {t: i for i, t in enumerate(H["time"])}
+    E = ens["hourly"] if ens else {"time": []}
+    eidx = {t: i for i, t in enumerate(E["time"])}
+    members = [k for k in E if k.startswith("precipitation")]
+
+    def win(arr, ix, end, h):
+        out = []
+        for k in range(h):
+            i = ix.get(iso(end - timedelta(hours=k)))
+            if i is None or arr[i] is None:
+                return None
+            out.append(arr[i])
+        return out
+
+    start = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    while start.hour % 3:
+        start += timedelta(hours=1)
+    M = "ECMWF"
+    for j in range(27):
+        c = start + timedelta(hours=3 * j)
+        i = idx.get(iso(c))
+        if i is None:
+            continue
+        vals = [H[k][i] for k in ("temperature_2m", "dew_point_2m", "cloud_cover",
+                                  "wind_direction_10m", "wind_speed_10m", "wind_gusts_10m")]
+        if any(v is None for v in vals):
+            continue
+        tmp, dpt, sky, wdr, wsp, gst = vals
+        if c.hour in (0, 12):
+            w = win(H["temperature_2m"], idx, c, 13)
+            if w:
+                rows.add(M, run, c, "XN", round(max(w) if c.hour == 0 else min(w)))
+        rows.add(M, run, c, "TMP", round(tmp))
+        rows.add(M, run, c, "DPT", round(dpt))
+        rows.add(M, run, c, "CLD", sky, cld(sky))
+        d = round(wdr / 10) % 36 or 36
+        rows.add(M, run, c, "WDR", d * 10, f"{d:02d}")
+        rows.add(M, run, c, "WSP", round(wsp), f"{round(wsp):02d}")
+        rows.add(M, run, c, "GST", round(gst), f"{round(gst):02d}")
+        p3, s3 = win(H["precipitation"], idx, c, 3), win(H["snowfall"], idx, c, 3)
+        if p3 is not None:
+            rows.add(M, run, c, "TYP", None, "-" if sum(p3) < 0.005 else ("S" if s3 and sum(s3) > 0 else "R"))
+        for h, ok in ((6, c.hour % 6 == 0), (12, c.hour % 12 == 0)):
+            if not ok:
+                continue
+            w = win(H["precipitation"], idx, c, h)
+            if w is not None:
+                cat = qcat(round(sum(w) * 100))
+                rows.add(M, run, c, f"Q{h:02d}", cat, str(cat))
+            tot = wet = 0
+            for m in members:
+                s = win(E[m], eidx, c, h)
+                if s is not None:
+                    tot += 1
+                    wet += sum(s) >= 0.0495  # share of members with >= 0.05 in
+            if tot:
+                rows.add(M, run, c, f"P{h:02d}", round(100 * wet / tot))
+            if h == 6:
+                cp = win(H["cape"], idx, c, 6)
+                if cp:
+                    rows.add(M, run, c, "CAP", max(cp), str(round(max(cp) / 100)))
+    # the run 12 hours earlier: wind and gusts
+    prior = run - timedelta(hours=12)
+    pj = get_json(f"{SR}?{q}&run={iso(prior)}&hourly=wind_speed_10m,wind_gusts_10m")
+    if pj:
+        meta["ECMWF prior"] = iso(prior) + "Z"
+        P = pj["hourly"]
+        for i, t in enumerate(P["time"]):
+            v = datetime.fromisoformat(t).replace(tzinfo=UTC)
+            if v.hour % 3 or v < start or P["wind_speed_10m"][i] is None or P["wind_gusts_10m"][i] is None:
+                continue
+            w, g = round(P["wind_speed_10m"][i]), round(P["wind_gusts_10m"][i])
+            prev_rows.add(M, prior, v, "WSP", w, f"{w:02d}")
+            prev_rows.add(M, prior, v, "GST", g, f"{g:02d}")
+
+
+# ------------------------------------------------------------------ main
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--station", default="KMLB")
+    ap.add_argument("--lat", type=float, default=28.1028)
+    ap.add_argument("--lon", type=float, default=-80.6453)
+    ap.add_argument("--out", default="data")
+    a = ap.parse_args()
+    sta = a.station.upper()
+    now = datetime.now(UTC)
+    rows, prev = Rows(), Rows()
+    meta = {}
+    prior_only = {"WSP", "GST", "P12"}
+
+    mav, mav_p = fetch_mos("GFSMAV", ("00", "06", "12", "18"), sta, "GFS MOS GUIDANCE")
+    met, met_p = fetch_mos("NAMMET", ("00", "12"), sta, "NAM MOS GUIDANCE")
+    nbs, nbs_p = fetch_nbs(sta)
+    for name, cur, pri, parse in (("GFS MOS", mav, mav_p, lambda b, r, o: parse_mos(b, "GFS MOS", r, o)),
+                                  ("NAM MOS", met, met_p, lambda b, r, o: parse_mos(b, "NAM MOS", r, o)),
+                                  ("NBM", nbs, nbs_p, parse_nbs)):
+        if cur:
+            parse(cur, rows, None)
+            meta[name] = run_time(cur).strftime("%Y-%m-%dT%H:%MZ")
+        else:
+            print(f"warning: no {name} bulletin for {sta}", file=sys.stderr)
+        if pri:
+            parse(pri, prev, prior_only)
+            meta[name + " prior"] = run_time(pri).strftime("%Y-%m-%dT%H:%MZ")
+    try:
+        ecmwf(a.lat, a.lon, now, rows, prev, meta)
+    except Exception as e:  # keep the MOS data even if ECMWF fails
+        print(f"warning: ECMWF failed: {e}", file=sys.stderr)
+
+    if not rows:
+        sys.exit("No data fetched; leaving the existing files alone.")
+    os.makedirs(a.out, exist_ok=True)
+    with open(os.path.join(a.out, "models.json"), "w") as f:
+        json.dump({"rows": rows}, f, separators=(",", ":"))
+    with open(os.path.join(a.out, "previous.json"), "w") as f:
+        json.dump({"rows": prev}, f, separators=(",", ":"))
+    with open(os.path.join(a.out, "meta.json"), "w") as f:
+        json.dump({"station": sta, "generated": now.strftime("%Y-%m-%dT%H:%MZ"), "runs": meta}, f, indent=1)
+    print(f"{len(rows)} rows, {len(prev)} prior rows; runs: {meta}")
+
+
+if __name__ == "__main__":
+    main()
