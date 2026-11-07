@@ -67,7 +67,7 @@ window.dash = (() => {
   const start = async () => {
     w = window.innerWidth;
     redraw();
-    await Promise.all([load('models', 'data/models.json'), load('previous', 'data/previous.json'), load('meta', 'data/meta.json')]);
+    await Promise.all([load('models', 'data/models.json'), load('previous', 'data/previous.json'), load('meta', 'data/meta.json'), load('ndfd', 'data/ndfd.json')]);
     compute();
     redraw();
   };
@@ -121,6 +121,8 @@ window.dash = (() => {
 .kg-sec h2.kg-sec-h{font-size:var(--cds-font-size-heading);font-weight:var(--cds-font-weight-medium);margin:0}
 .kg-sw-inc{background:var(--kg-inc)}.kg-sw-dec{background:var(--kg-dec)}
 .kg-sw-sq{width:.7rem;height:.7rem;border-radius:2px}
+#nws-vs-nbm .kg-chg-grid{grid-template-columns:repeat(auto-fit,minmax(min(100%,22rem),1fr))}
+#nws-vs-nbm .kg-chg{min-height:150px}
 </style>
 
 <div class="kg">
@@ -179,6 +181,32 @@ window.dash = (() => {
     </div>
   </section>
 
+  <section class="kg-sec" id="nws-vs-nbm">
+    <h2 class="kg-sec-h">NWS forecast vs NBM</h2>
+    <p class="kg-note">The NWS official forecast (the NDFD grid at KMLB) minus the latest NBM, at the same valid time. Bars above the line mean the forecasters went higher than NBM, and the number on each bar is the difference. Hover a bar for both values.</p>
+    <div class="kg-runs">
+      <span class="kg-run"><i class="kg-sw kg-sw-sq kg-sw-inc"></i>NWS higher</span>
+      <span class="kg-run"><i class="kg-sw kg-sw-sq kg-sw-dec"></i>NWS lower</span>
+    </div>
+    <div class="kg-chg-grid">
+      <section class="kg-card" id="nws-p12">
+        <h2>12-hour rain chances</h2>
+        <p class="kg-note">Percentage points, 12 hours ending 00Z and 12Z. The NWS value is its highest hourly chance in each period, which can run a little below a true 12-hour chance.</p>
+        <div class="kg-chg dash-skeleton" data-draw="chg" data-element="P12" data-source="ndfdgap"></div>
+      </section>
+      <section class="kg-card" id="nws-wind">
+        <h2>Wind speed</h2>
+        <p class="kg-note">Sustained 10 m wind, knots, every 3 hours.</p>
+        <div class="kg-chg dash-skeleton" data-draw="chg" data-element="WSP" data-source="ndfdgap"></div>
+      </section>
+      <section class="kg-card" id="nws-gusts">
+        <h2>Wind gusts</h2>
+        <p class="kg-note">Gusts, knots, every 3 hours.</p>
+        <div class="kg-chg dash-skeleton" data-draw="chg" data-element="GST" data-source="ndfdgap"></div>
+      </section>
+    </div>
+  </section>
+
   <section class="kg-card" id="bulletin">
     <h2>Combined bulletin</h2>
     <p class="kg-note">All three models in MOS layout, one row per model under each element. Temperatures more than 3°F from the other models' median are highlighted. Rain and thunder chances are shaded by value.</p>
@@ -195,7 +223,7 @@ window.dash = (() => {
 </div>
   <footer class="kg-foot">
     <div>Last updated <b data-draw="updated">—</b>. Refreshes automatically every 6 hours.</div>
-    <div>Sources: <a href="https://www.weather.gov/mdl/mos_getbull">NWS MDL MOS bulletins</a> (GFS MAV), <a href="https://www.weather.gov/mdl/nbm_text">NBM text bulletins</a> (NBS), and ECMWF IFS 0.25° and ENS via <a href="https://open-meteo.com/">Open-Meteo</a> (CC BY 4.0). ECMWF values are raw model output, not MOS.</div>
+    <div>Sources: <a href="https://www.weather.gov/mdl/mos_getbull">NWS MDL MOS bulletins</a> (GFS MAV), <a href="https://www.weather.gov/mdl/nbm_text">NBM text bulletins</a> (NBS), ECMWF IFS 0.25° and ENS via <a href="https://open-meteo.com/">Open-Meteo</a> (CC BY 4.0), and the NWS official forecast grid from <a href="https://www.weather.gov/documentation/services-web-api">api.weather.gov</a>. ECMWF values are raw model output, not MOS.</div>
   </footer>
 </div>
 
@@ -494,8 +522,26 @@ dash.calc('changes', {
   }
 });
 
+dash.calc('ndfdgap', {
+  inputs: ['models', 'ndfd'],
+  title: 'NWS forecast minus NBM',
+  description: 'NWS official forecast (NDFD grid) minus the latest NBM, per element and valid time, for wind, gusts and P12.',
+  fn: (models, ndfd) => {
+    const nws = new Map(ndfd.map((r) => [r.element + '|' + r.valid, r]));
+    return models
+      .filter((r) => r.model === 'NBM' && ['WSP', 'GST', 'P12'].includes(r.element) && nws.has(r.element + '|' + r.valid))
+      .map((r) => {
+        const n = nws.get(r.element + '|' + r.valid);
+        return {key: r.element + '|' + r.valid, model: 'NWS', element: r.element, valid: r.valid,
+          now: Number(n.value), before: Number(r.value), change: Number(n.value) - Number(r.value),
+          run_now: n.run, run_before: r.run};
+      });
+  }
+});
+
 dash.draw('chg', (el) => {
-  const d = dash.data('changes');
+  const d = dash.data(el.dataset.source || 'changes');
+  const gap = el.dataset.source === 'ndfdgap';
   el.classList.toggle('dash-skeleton', d.status === 'loading');
   el.replaceChildren();
   if (d.status === 'error') return KG.fail(el);
@@ -505,8 +551,8 @@ dash.draw('chg', (el) => {
   const dunit = elem === 'WSP' || elem === 'GST' ? ' kt' : ' pts';
   const rows = d.data.filter((r) => r.element === elem);
   if (!rows.length) return;
-  const order = ['GFS MOS', 'GFS MEX', 'NBM', 'ECMWF'];
-  const label = {'GFS MOS': 'GFS MOS', 'GFS MEX': 'GFS MEX', 'NBM': 'NBM', 'ECMWF': 'ECMWF'};
+  const order = ['GFS MOS', 'GFS MEX', 'NBM', 'ECMWF', 'NWS'];
+  const label = {'GFS MOS': 'GFS MOS', 'GFS MEX': 'GFS MEX', 'NBM': 'NBM', 'ECMWF': 'ECMWF', 'NWS': 'NWS − NBM'};
   const mods = order.filter((m) => rows.some((r) => r.model === m));
   const times = Array.from(new Set(rows.map((r) => r.valid))).sort();
   const W = el.clientWidth || 500, rowH = 96, head = 16, axisH = 22, lab = 14;
@@ -530,7 +576,7 @@ dash.draw('chg', (el) => {
     const nameW = g.select('text').node().getComputedTextLength();
     const runT = g.append('text').attr('x', m.l + nameW + 8).attr('y', top + 12).attr('fill', 'var(--color-fg-muted)')
       .style('font-size', 'var(--cds-font-size-caption)')
-      .text(`${fmtRun(mr[0].run_before)} → ${fmtRun(mr[0].run_now)}`);
+      .text(gap ? `NBM ${fmtRun(mr[0].run_before)} · NWS ${d3.utcFormat('%H%MZ %b %-d')(new Date(mr[0].run_now))}` : `${fmtRun(mr[0].run_before)} → ${fmtRun(mr[0].run_now)}`);
     if (m.l + nameW + 8 + runT.node().getComputedTextLength() > W - m.r) {
       runT.text(`${d3.utcFormat('%HZ')(new Date(mr[0].run_before))} → ${d3.utcFormat('%HZ')(new Date(mr[0].run_now))}`);
       if (m.l + nameW + 8 + runT.node().getComputedTextLength() > W - m.r) runT.remove();
@@ -546,7 +592,7 @@ dash.draw('chg', (el) => {
         h.textContent = (elem === 'P12' ? '12 h ending ' : elem === 'P24' ? '24 h ending ' : '') + d3.utcFormat('%a %b %-d, %HZ')(new Date(r.valid));
         const a = document.createElement('div'); a.className = 'kg-tip-r';
         const b = document.createElement('b'); b.textContent = `${sign(r.change)}${dunit}`;
-        a.append(`${label[r.model]}: ${r.before}${unit} → ${r.now}${unit}`, b);
+        a.append(gap ? `NBM ${r.before}${unit} · NWS ${r.now}${unit}` : `${label[r.model]}: ${r.before}${unit} → ${r.now}${unit}`, b);
         tip.append(h, a); tip.hidden = false;
         const sc = el.clientWidth / W;
         const cx = (x(r.valid) + x.bandwidth()) * sc;

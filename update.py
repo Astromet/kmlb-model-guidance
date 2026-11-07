@@ -9,6 +9,7 @@ Fetches the latest and the 12-hours-earlier runs of
 and writes
   data/models.json    latest runs, one row per model / element / valid time
   data/previous.json  wind, gusts and P12 from each model's run 12 hours earlier
+  data/ndfd.json      NWS official forecast (NDFD grid): wind, gusts and P12 at the station
   data/meta.json      when this ran and which runs it used
 
 Usage:  python3 update.py [--station KMLB --lat 28.1028 --lon -80.6453] [--out data]
@@ -362,6 +363,69 @@ def ecmwf(lat, lon, now, rows, prev_rows, meta):
             prev_rows.add(M, prior, v, "GST", g, f"{g:02d}")
 
 
+# ------------------------------------------------------------------ NWS official forecast (NDFD grid)
+API = "https://api.weather.gov"
+
+
+def duration_hours(d):
+    m = re.fullmatch(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?", d)
+    return int(m[1] or 0) * 24 + int(m[2] or 0) + (1 if m[3] else 0) if m else 1
+
+
+def hourly(layer):
+    """Expand an NWS grid layer ('start/duration' intervals) to {hour: value}."""
+    out = {}
+    for v in layer.get("values", []):
+        start, dur = v["validTime"].split("/")
+        t = datetime.fromisoformat(start).astimezone(UTC)
+        for h in range(duration_hours(dur)):
+            out[t + timedelta(hours=h)] = v["value"]
+    return out
+
+
+def ndfd(lat, lon, rows, meta):
+    """NWS gridded forecast at the station: wind and gusts (kt) every 3 h, and P12 at 00Z/12Z
+    taken as the highest NWS precipitation chance in that 12-hour period."""
+    hdr = {"User-Agent": UA["User-Agent"], "Accept": "application/geo+json"}
+
+    def api(url):
+        for k in range(3):
+            try:
+                req = urllib.request.Request(url, headers=hdr)
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    return json.load(r)
+            except Exception as e:
+                last = e
+                time.sleep(3 * (k + 1))
+        print(f"warning: {url} failed: {last}", file=sys.stderr)
+        return None
+    pt = api(f"{API}/points/{lat:.4f},{lon:.4f}")
+    if not pt:
+        return
+    g = api(pt["properties"]["forecastGridData"])
+    if not g:
+        return
+    G = g["properties"]
+    upd = datetime.fromisoformat(G["updateTime"]).astimezone(UTC)
+    meta["NWS"] = upd.strftime("%Y-%m-%dT%H:%MZ")
+    meta["NWS grid"] = f'{pt["properties"]["gridId"]} {pt["properties"]["gridX"]},{pt["properties"]["gridY"]}'
+    kt = 1 / 1.852  # km/h to knots
+    spd, gst, pop = hourly(G.get("windSpeed", {})), hourly(G.get("windGust", {})), hourly(G.get("probabilityOfPrecipitation", {}))
+    for t in sorted(spd):
+        if t.hour % 3 == 0 and spd[t] is not None:
+            w = round(spd[t] * kt)
+            rows.add("NWS", upd, t, "WSP", w, f"{w:02d}")
+    for t in sorted(gst):
+        if t.hour % 3 == 0 and gst[t] is not None:
+            w = round(gst[t] * kt)
+            rows.add("NWS", upd, t, "GST", w, f"{w:02d}")
+    ends = sorted({t.replace(hour=h) + timedelta(days=dd) for t in pop for h in (0, 12) for dd in (0, 1)})
+    for e in ends:
+        win = [pop.get(e - timedelta(hours=k)) for k in range(12)]
+        if all(v is not None for v in win):
+            rows.add("NWS", upd, e, "P12", max(win))
+
+
 # ------------------------------------------------------------------ main
 def main():
     ap = argparse.ArgumentParser()
@@ -393,6 +457,12 @@ def main():
     except Exception as e:  # keep the MOS data even if ECMWF fails
         print(f"warning: ECMWF failed: {e}", file=sys.stderr)
 
+    nws = Rows()
+    try:
+        ndfd(a.lat, a.lon, nws, meta)
+    except Exception as e:
+        print(f"warning: NWS grid failed: {e}", file=sys.stderr)
+
     if not rows:
         sys.exit("No data fetched; leaving the existing files alone.")
     os.makedirs(a.out, exist_ok=True)
@@ -400,9 +470,11 @@ def main():
         json.dump({"rows": rows}, f, separators=(",", ":"))
     with open(os.path.join(a.out, "previous.json"), "w") as f:
         json.dump({"rows": prev}, f, separators=(",", ":"))
+    with open(os.path.join(a.out, "ndfd.json"), "w") as f:
+        json.dump({"rows": nws}, f, separators=(",", ":"))
     with open(os.path.join(a.out, "meta.json"), "w") as f:
         json.dump({"station": sta, "generated": now.strftime("%Y-%m-%dT%H:%MZ"), "runs": meta}, f, indent=1)
-    print(f"{len(rows)} rows, {len(prev)} prior rows; runs: {meta}")
+    print(f"{len(rows)} rows, {len(prev)} prior rows, {len(nws)} NWS rows; runs: {meta}")
 
 
 if __name__ == "__main__":
