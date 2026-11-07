@@ -1,8 +1,8 @@
 # KMLB model guidance
 
-GFS MOS, NAM MOS, the National Blend of Models and ECMWF for Melbourne, FL (KMLB), side by side in MOS layout, with charts of wind speed, 12-hour rain chances and how each model changed from its run 12 hours earlier.
+GFS MOS, the National Blend of Models and ECMWF for Melbourne, FL (KMLB), side by side in MOS layout, with charts of wind speed, 12-hour rain chances and how each model changed from its run 12 hours earlier.
 
-The site is rebuilt every 6 hours by GitHub Actions (`.github/workflows/update.yml`): `update.py` fetches the latest bulletins and model data, writes `data/*.json`, and the page is deployed to GitHub Pages. Run it any time from the **Actions** tab with **Run workflow**.
+The site is rebuilt every 6 hours by GitHub Actions (`.github/workflows/update.yml`): `update.py` fetches the latest bulletins and model data (skipping any model whose newest run is over 36 hours old), writes `data/*.json`, and the page is deployed to GitHub Pages. Run it any time from the **Actions** tab with **Run workflow**.
 
 ## Files
 
@@ -23,7 +23,7 @@ For another station: `python3 update.py --station KTPA --lat 27.96 --lon -82.54`
 
 ## Sources and conversions
 
-- **GFS MOS (MAV)** and **NAM MOS (MET)**: [NWS MDL MOS bulletins](https://www.weather.gov/mdl/mos_getbull).
+- **GFS MOS (MAV)**: [NWS MDL MOS bulletins](https://www.weather.gov/mdl/mos_getbull). NAM MOS was retired in November 2026 and has been removed.
 - **NBM v5 NBS**: [NBM text bulletins](https://www.weather.gov/mdl/nbm_text). Sky cover, QPF, ceiling and visibility are converted to MOS categories.
 - **ECMWF**: IFS 0.25° deterministic run and 51-member ENS via [Open-Meteo](https://open-meteo.com/) (CC BY 4.0). This is raw model output, not MOS. P06/P12 are the share of ensemble members with at least 0.05 in; CAP is max CAPE in hundreds of J/kg.
 - **Change charts** compare each model's latest run with its run 12 hours earlier. ECMWF rain chances are left out because earlier ensemble runs aren't kept.

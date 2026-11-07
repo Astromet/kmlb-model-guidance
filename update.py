@@ -3,7 +3,7 @@
 Build the KMLB model-guidance data files.
 
 Fetches the latest and the 12-hours-earlier runs of
-  * GFS MOS (MAV) and NAM MOS (MET)        - weather.gov MDL text bulletins
+  * GFS MOS (MAV)                          - weather.gov MDL text bulletins
   * NBM v5 NBS                             - weather.gov MDL text bulletins
   * ECMWF IFS 0.25 (deterministic) + ENS   - Open-Meteo
 and writes
@@ -67,10 +67,18 @@ def station_block(text, sta, kind):
     return m.group(0).rstrip() if m else None
 
 
+MAX_AGE = timedelta(hours=36)  # a newest run older than this means the product has stopped
+
+
+def fresh(runs):
+    now = datetime.now(UTC)
+    return {c: r for c, r in runs.items() if r and now - r <= MAX_AGE}
+
+
 def latest_and_prior(files, sta, kind):
     """files: {cycle: text}. Returns (latest_block, prior_block) where prior is 12 h earlier."""
     runs = {c: run_time(t) for c, t in files.items() if t}
-    if not runs:
+    if not fresh(runs):
         return None, None
     latest = max(runs, key=runs.get)
     prior = next((c for c, r in runs.items() if r == runs[latest] - timedelta(hours=12)), None)
@@ -86,7 +94,7 @@ def fetch_mos(prefix, cycles, sta, kind):
 def fetch_nbs(sta):
     heads = {c: get(f"{MDL}NBM/blend_nbstx.t{c}z_1.txt") for c in ("01", "07", "13", "19")}
     runs = {c: run_time(t) for c, t in heads.items() if t}
-    if not runs:
+    if not fresh(runs):
         return None, None
     latest = max(runs, key=runs.get)
     prior = next((c for c, r in runs.items() if r == runs[latest] - timedelta(hours=12)), None)
@@ -94,7 +102,7 @@ def fetch_nbs(sta):
     def block(c):
         for p in range(1, 6):
             t = heads[c] if p == 1 else get(f"{MDL}NBM/blend_nbstx.t{c}z_{p}.txt")
-            b = station_block(t, sta, r"NBM V[\d.]+ NBS GUIDANCE")
+            b = station_block(t, sta, r"NBM\s+(?:V[\d.]+\s+)?NBS GUIDANCE")  # header may or may not carry a version
             if b:
                 return b
         return None
@@ -215,6 +223,7 @@ def parse_nbs(block, rows, only=None):
     if want("WDR"):
         for t, v in zip(vt, getf("WDR")):
             if v is not None:
+                v = 36 if v == 0 else v  # NBM writes due north as 0; MOS uses 36
                 rows.add(M, run, t, "WDR", v * 10, f"{v:02d}")
     if want("CLD"):
         for t, v in zip(vt, getf("SKY")):
@@ -368,10 +377,8 @@ def main():
     prior_only = {"WSP", "GST", "P12"}
 
     mav, mav_p = fetch_mos("GFSMAV", ("00", "06", "12", "18"), sta, "GFS MOS GUIDANCE")
-    met, met_p = fetch_mos("NAMMET", ("00", "12"), sta, "NAM MOS GUIDANCE")
     nbs, nbs_p = fetch_nbs(sta)
     for name, cur, pri, parse in (("GFS MOS", mav, mav_p, lambda b, r, o: parse_mos(b, "GFS MOS", r, o)),
-                                  ("NAM MOS", met, met_p, lambda b, r, o: parse_mos(b, "NAM MOS", r, o)),
                                   ("NBM", nbs, nbs_p, parse_nbs)):
         if cur:
             parse(cur, rows, None)

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>KMLB Model Guidance</title>
-<meta name="description" content="GFS MOS, NAM MOS, NBM and ECMWF guidance for Melbourne, FL (KMLB) side by side, updated every 6 hours.">
+<meta name="description" content="GFS MOS, NBM and ECMWF guidance for Melbourne, FL (KMLB) side by side, updated every 6 hours.">
 <style>
 /* Layout: one centered column of cards; tokens below drive every color and size. */
 :root{
@@ -126,7 +126,7 @@ window.dash = (() => {
 <div class="kg">
   <header class="kg-head" id="summary">
     <h1 class="kg-title">KMLB model guidance</h1>
-    <p class="kg-sub">Next max temperature (ending <b data-draw="xn-when" data-source="nextmax" data-field="when">—</b>): <b data-draw="xn-lo" data-source="nextmax" data-field="lo">—</b>–<b data-draw="xn-hi" data-source="nextmax" data-field="hi">—</b>°F across the four models. Wettest 12-hour period ends <b data-draw="pop-when" data-source="wettest" data-field="when">—</b>, with rain chances of <b data-draw="pop-lo" data-source="wettest" data-field="lo">—</b>–<b data-draw="pop-hi" data-source="wettest" data-field="hi">—</b>%.</p>
+    <p class="kg-sub">Next max temperature (ending <b data-draw="xn-when" data-source="nextmax" data-field="when">—</b>): <b data-draw="xn-lo" data-source="nextmax" data-field="lo">—</b>–<b data-draw="xn-hi" data-source="nextmax" data-field="hi">—</b>°F across the models. Wettest 12-hour period ends <b data-draw="pop-when" data-source="wettest" data-field="when">—</b>, with rain chances of <b data-draw="pop-lo" data-source="wettest" data-field="lo">—</b>–<b data-draw="pop-hi" data-source="wettest" data-field="hi">—</b>%.</p>
     <div class="kg-runs" data-draw="runs" data-source="models"></div>
   </header>
 
@@ -136,7 +136,6 @@ window.dash = (() => {
       <p class="kg-note">3-hourly sustained 10 m wind, knots, valid times in UTC.</p>
       <div class="kg-legend kg-runs">
         <span class="kg-run"><i class="kg-sw" data-model="0"></i>GFS MOS</span>
-        <span class="kg-run"><i class="kg-sw" data-model="1"></i>NAM MOS</span>
         <span class="kg-run"><i class="kg-sw" data-model="2"></i>NBM</span>
         <span class="kg-run"><i class="kg-sw" data-model="3"></i>ECMWF</span>
       </div>
@@ -147,7 +146,6 @@ window.dash = (() => {
       <p class="kg-note">P12 for the 12 hours ending at each 00Z and 12Z, in percent.</p>
       <div class="kg-legend kg-runs">
         <span class="kg-run"><i class="kg-sw" data-model="0"></i>GFS MOS</span>
-        <span class="kg-run"><i class="kg-sw" data-model="1"></i>NAM MOS</span>
         <span class="kg-run"><i class="kg-sw" data-model="2"></i>NBM</span>
         <span class="kg-run"><i class="kg-sw" data-model="3"></i>ECMWF</span>
       </div>
@@ -170,7 +168,7 @@ window.dash = (() => {
       </section>
       <section class="kg-card" id="change-gusts">
         <h2>Wind gusts</h2>
-        <p class="kg-note">Gusts, knots. NBM and ECMWF only, since GFS and NAM MOS don't forecast gusts.</p>
+        <p class="kg-note">Gusts, knots. NBM and ECMWF only, since GFS MOS doesn't forecast gusts.</p>
         <div class="kg-chg dash-skeleton" data-draw="chg" data-element="GST" data-source="changes"></div>
       </section>
       <section class="kg-card" id="change-p12">
@@ -183,7 +181,7 @@ window.dash = (() => {
 
   <section class="kg-card" id="bulletin">
     <h2>Combined bulletin</h2>
-    <p class="kg-note">All four models in MOS layout, one row per model under each element. Temperatures more than 3°F from the other models' median are highlighted. Rain and thunder chances are shaded by value.</p>
+    <p class="kg-note">All three models in MOS layout, one row per model under each element. Temperatures more than 3°F from the other models' median are highlighted. Rain and thunder chances are shaded by value.</p>
     <div class="kg-scroll dash-skeleton" data-draw="grid"></div>
     <ul class="kg-defs">
       <li><b>X/N</b> max (at 00Z) and min (at 12Z), °F. <b>CLD</b> CL FW SC BK OV. <b>WDR</b> tens of degrees. <b>WSP</b>, <b>GST</b> knots.</li>
@@ -191,26 +189,27 @@ window.dash = (() => {
       <li><b>Q06</b>, <b>Q12</b> QPF category: 0 none, 1 .01–.09, 2 .10–.24, 3 .25–.49, 4 .50–.99, 5 1.00–1.99, 6 2.00+ in.</li>
       <li><b>T06</b>, <b>T12</b> thunder chance in percent; MOS also shows the severe chance after the slash. <b>CAP</b> ECMWF max CAPE, hundreds of J/kg; it stands in for thunder, which ECMWF's open data lacks.</li>
       <li><b>CIG</b> ceiling category 1–8 and <b>VIS</b> visibility category 1–7, as in MOS. ECMWF has neither.</li>
-      <li>GFS and NAM are MOS guidance; NBM is the National Blend; ECMWF is raw IFS model output, not statistically corrected.</li>
+      <li>GFS is MOS guidance; NBM is the National Blend; ECMWF is raw IFS model output, not statistically corrected. NAM MOS was retired in November 2026.</li>
     </ul>
   </section>
 </div>
   <footer class="kg-foot">
     <div>Last updated <b data-draw="updated">—</b>. Refreshes automatically every 6 hours.</div>
-    <div>Sources: <a href="https://www.weather.gov/mdl/mos_getbull">NWS MDL MOS bulletins</a> (GFS MAV, NAM MET), <a href="https://www.weather.gov/mdl/nbm_text">NBM text bulletins</a> (NBS), and ECMWF IFS 0.25° and ENS via <a href="https://open-meteo.com/">Open-Meteo</a> (CC BY 4.0). ECMWF values are raw model output, not MOS.</div>
+    <div>Sources: <a href="https://www.weather.gov/mdl/mos_getbull">NWS MDL MOS bulletins</a> (GFS MAV), <a href="https://www.weather.gov/mdl/nbm_text">NBM text bulletins</a> (NBS), and ECMWF IFS 0.25° and ENS via <a href="https://open-meteo.com/">Open-Meteo</a> (CC BY 4.0). ECMWF values are raw model output, not MOS.</div>
   </footer>
 </div>
 
 <script>
 window.KG = (() => {
-  const MODELS = ['GFS MOS', 'NAM MOS', 'NBM', 'ECMWF'];
-  const SHORT = {'GFS MOS': 'GFS', 'NAM MOS': 'NAM', 'NBM': 'NBM', 'ECMWF': 'ECM'};
+  const MODELS = ['GFS MOS', 'NBM', 'ECMWF'];
+  const SHORT = {'GFS MOS': 'GFS', 'NBM': 'NBM', 'ECMWF': 'ECM'};
+  const COLOR_INDEX = {'GFS MOS': 0, 'NBM': 2, 'ECMWF': 3}; // keep each model's color fixed
   const ELEMENTS = [
     ['XN', 'X/N'], ['TMP', 'TMP'], ['DPT', 'DPT'], ['CLD', 'CLD'], ['WDR', 'WDR'], ['WSP', 'WSP'], ['GST', 'GST'],
     ['P06', 'P06'], ['P12', 'P12'], ['Q06', 'Q06'], ['Q12', 'Q12'], ['T06', 'T06'], ['T12', 'T12'], ['CAP', 'CAP'],
     ['TYP', 'TYP'], ['CIG', 'CIG'], ['VIS', 'VIS']
   ];
-  const color = (m) => dash.colors[MODELS.indexOf(m) % dash.colors.length];
+  const color = (m) => dash.colors[(COLOR_INDEX[m] ?? 7) % dash.colors.length];
   // columns: 3-hourly valid times from the latest model start, out to 84 h
   const columns = (rows) => {
     const firsts = MODELS.map((m) => d3.min(rows.filter((r) => r.model === m), (r) => r.valid)).filter(Boolean);
@@ -229,12 +228,12 @@ document.querySelectorAll('.kg-sw[data-model]').forEach((sw) => {
 dash.calc('nextmax', {
   inputs: ['models'],
   title: 'Next max temperature',
-  description: 'Lowest and highest forecast max (X/N at the first 00Z that at least three models share) across the four models.',
+  description: 'Lowest and highest forecast max (X/N at the first 00Z that at least two models share) across the models.',
   fn: (models) => {
-    const firsts = ['GFS MOS', 'NAM MOS', 'NBM', 'ECMWF'].map((m) => models.filter((r) => r.model === m).map((r) => r.valid).sort()[0]).filter(Boolean).sort();
+    const firsts = ['GFS MOS', 'NBM', 'ECMWF'].map((m) => models.filter((r) => r.model === m).map((r) => r.valid).sort()[0]).filter(Boolean).sort();
     const start = firsts[firsts.length - 1];
     const xn = models.filter((r) => r.element === 'XN' && r.valid >= start && r.valid.slice(11, 13) === '00');
-    const when = xn.map((r) => r.valid).sort().find((t) => xn.filter((r) => r.valid === t).length >= 3);
+    const when = xn.map((r) => r.valid).sort().find((t) => xn.filter((r) => r.valid === t).length >= 2);
     const vals = xn.filter((r) => r.valid === when).map((r) => Number(r.value));
     if (!when) return [];
     const d = new Date(when);
@@ -247,13 +246,13 @@ dash.calc('wettest', {
   title: 'Wettest 12-hour period',
   description: 'The P12 period with the highest average chance across the models, and the range between them.',
   fn: (models) => {
-    const firsts = ['GFS MOS', 'NAM MOS', 'NBM', 'ECMWF'].map((m) => models.filter((r) => r.model === m).map((r) => r.valid).sort()[0]).filter(Boolean).sort();
+    const firsts = ['GFS MOS', 'NBM', 'ECMWF'].map((m) => models.filter((r) => r.model === m).map((r) => r.valid).sort()[0]).filter(Boolean).sort();
     const start = firsts[firsts.length - 1];
     const byTime = {};
     models.filter((r) => r.element === 'P12' && r.valid >= start).forEach((r) => { (byTime[r.valid] = byTime[r.valid] || []).push(Number(r.value)); });
     let best = null;
     Object.entries(byTime).forEach(([t, v]) => {
-      if (v.length < 3) return;
+      if (v.length < 2) return;
       const mean = v.reduce((a, b) => a + b, 0) / v.length;
       if (!best || mean > best.mean) best = {t, v, mean};
     });
@@ -506,8 +505,8 @@ dash.draw('chg', (el) => {
   const dunit = elem === 'WSP' || elem === 'GST' ? ' kt' : ' pts';
   const rows = d.data.filter((r) => r.element === elem);
   if (!rows.length) return;
-  const order = ['GFS MOS', 'GFS MEX', 'NAM MOS', 'NBM', 'ECMWF'];
-  const label = {'GFS MOS': 'GFS MOS', 'GFS MEX': 'GFS MEX', 'NAM MOS': 'NAM MOS', 'NBM': 'NBM', 'ECMWF': 'ECMWF'};
+  const order = ['GFS MOS', 'GFS MEX', 'NBM', 'ECMWF'];
+  const label = {'GFS MOS': 'GFS MOS', 'GFS MEX': 'GFS MEX', 'NBM': 'NBM', 'ECMWF': 'ECMWF'};
   const mods = order.filter((m) => rows.some((r) => r.model === m));
   const times = Array.from(new Set(rows.map((r) => r.valid))).sort();
   const W = el.clientWidth || 500, rowH = 96, head = 16, axisH = 22, lab = 14;
