@@ -9,7 +9,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -27,6 +27,16 @@ jobs:
           python-version: "3.12"
       - name: Fetch the latest model runs
         run: python3 update.py --station KMLB --lat 28.1028 --lon -80.6453 --out data
+      - name: Save a data snapshot to the data branch
+        run: |
+          cd data
+          git init -q -b data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add models.json previous.json meta.json
+          git commit -q -m "Data snapshot $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" data:data
+          rm -rf .git
       - name: Assemble the site
         run: |
           mkdir -p _site

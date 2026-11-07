@@ -2,7 +2,7 @@
 
 GFS MOS, the National Blend of Models and ECMWF for Melbourne, FL (KMLB), side by side in MOS layout, with charts of wind speed, 12-hour rain chances and how each model changed from its run 12 hours earlier.
 
-The site is rebuilt every 6 hours by GitHub Actions (`.github/workflows/update.yml`): `update.py` fetches the latest bulletins and model data (skipping any model whose newest run is over 36 hours old), writes `data/*.json`, and the page is deployed to GitHub Pages. Run it any time from the **Actions** tab with **Run workflow**.
+The site is rebuilt every 6 hours by GitHub Actions (`.github/workflows/update.yml`): `update.py` fetches the latest bulletins and model data (skipping any model whose newest run is over 36 hours old), writes `data/*.json`, and the page is deployed to GitHub Pages. Each run also saves its data files to the `data` branch. Run it any time from the **Actions** tab with **Run workflow**.
 
 ## Files
 
