@@ -9,6 +9,7 @@ Fetches the latest and the 12-hours-earlier runs of
 and writes
   data/models.json    latest runs, one row per model / element / valid time
   data/previous.json  wind, gusts and P12 from each model's run 12 hours earlier
+  data/mex.json       GFS extended MOS (MEX), latest run, 12-hourly to day 8, with climatology
   data/ndfd.json      NWS official forecast (NDFD grid): wind, gusts and P12 at the station
   data/meta.json      when this ran and which runs it used
 
@@ -252,6 +253,40 @@ def parse_nbs(block, rows, only=None):
                 rows.add(M, run, t, "TYP", None, b[1])
 
 
+# ------------------------------------------------------------------ GFS extended MOS (MEX)
+def parse_mex(block, rows):
+    """GFSX MOS: 12-hourly columns 4 characters wide, then up to two 3-character climatology fields."""
+    lines = block.split("\n")
+    run = run_time(lines[0])
+    fhr_line = next(l for l in lines if l.startswith(" FHR"))
+    ncol = (len(fhr_line.rstrip()) - 5 + 1) // 4
+    fhrs = [num(fhr_line[5 + 4 * i: 8 + 4 * i].strip()) for i in range(ncol)]
+    M = "GFS MEX"
+    for l in lines[3:]:
+        label = l[1:4].strip()
+        if not label:
+            continue
+        el = "XN" if label in ("X/N", "N/X") else label
+        for i, h in enumerate(fhrs):
+            f = l[5 + 4 * i: 8 + 4 * i].strip()
+            if h is None or not f:
+                continue
+            v = num(f)
+            rows.add(M, run, run + timedelta(hours=h), el, v, f if v is None else (f if el in ("WND",) else str(v)))
+        end = 5 + 4 * ncol - 1
+        climo = [l[end + 3 * k: end + 3 * k + 3].strip() for k in range(2)]
+        climo = [c for c in climo if c and c != "999"]
+        if climo:
+            rows.append({"model": M, "run": run.strftime("%Y-%m-%dT%H:%MZ"), "valid": "CLIMO",
+                         "element": el, "value": None, "text": " ".join(climo)})
+
+
+def fetch_mex(sta):
+    files = {c: get(f"{MDL}MOS/GFSMEX.t{c}z") for c in ("00", "12")}
+    cur, _ = latest_and_prior(files, sta, "GFSX MOS GUIDANCE")
+    return cur
+
+
 # ------------------------------------------------------------------ ECMWF
 def iso(t):
     return t.strftime("%Y-%m-%dT%H:%M")
@@ -457,6 +492,14 @@ def main():
     except Exception as e:  # keep the MOS data even if ECMWF fails
         print(f"warning: ECMWF failed: {e}", file=sys.stderr)
 
+    mexr = Rows()
+    mex = fetch_mex(sta)
+    if mex:
+        parse_mex(mex, mexr)
+        meta["GFS MEX"] = run_time(mex).strftime("%Y-%m-%dT%H:%MZ")
+    else:
+        print(f"warning: no GFS MEX bulletin for {sta}", file=sys.stderr)
+
     nws = Rows()
     try:
         ndfd(a.lat, a.lon, nws, meta)
@@ -470,11 +513,13 @@ def main():
         json.dump({"rows": rows}, f, separators=(",", ":"))
     with open(os.path.join(a.out, "previous.json"), "w") as f:
         json.dump({"rows": prev}, f, separators=(",", ":"))
+    with open(os.path.join(a.out, "mex.json"), "w") as f:
+        json.dump({"rows": mexr}, f, separators=(",", ":"))
     with open(os.path.join(a.out, "ndfd.json"), "w") as f:
         json.dump({"rows": nws}, f, separators=(",", ":"))
     with open(os.path.join(a.out, "meta.json"), "w") as f:
         json.dump({"station": sta, "generated": now.strftime("%Y-%m-%dT%H:%MZ"), "runs": meta}, f, indent=1)
-    print(f"{len(rows)} rows, {len(prev)} prior rows, {len(nws)} NWS rows; runs: {meta}")
+    print(f"{len(rows)} rows, {len(prev)} prior rows, {len(nws)} NWS rows, {len(mexr)} MEX rows; runs: {meta}")
 
 
 if __name__ == "__main__":
