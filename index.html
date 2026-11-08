@@ -67,7 +67,7 @@ window.dash = (() => {
   const start = async () => {
     w = window.innerWidth;
     redraw();
-    await Promise.all([load('models', 'data/models.json'), load('previous', 'data/previous.json'), load('meta', 'data/meta.json'), load('ndfd', 'data/ndfd.json'), load('mex', 'data/mex.json')]);
+    await Promise.all([load('models', 'data/models.json'), load('previous', 'data/previous.json'), load('meta', 'data/meta.json'), load('ndfd', 'data/ndfd.json'), load('mex', 'data/mex.json'), load('ext', 'data/ext.json')]);
     compute();
     redraw();
   };
@@ -122,6 +122,8 @@ window.dash = (() => {
 .kg-sw-inc{background:var(--kg-inc)}.kg-sw-dec{background:var(--kg-dec)}
 .kg-sw-sq{width:.7rem;height:.7rem;border-radius:2px}
 #extended .kg-scroll{min-height:0}
+#extended .kg-ext-h{font-size:var(--cds-font-size-body);font-weight:var(--cds-font-weight-medium);margin:var(--cds-gap-sm) 0 0}
+#extended .kg-ext-run{font-weight:400;color:var(--color-fg-muted)}
 #extended .kg-bul .kg-climo{border-left:1px solid var(--color-border-line);padding-left:1ch;text-align:left;color:var(--color-fg-muted)}
 #nws-vs-nbm .kg-chg-grid{grid-template-columns:repeat(auto-fit,minmax(min(100%,22rem),1fr))}
 #nws-vs-nbm .kg-chg{min-height:150px}
@@ -223,13 +225,19 @@ window.dash = (() => {
     </ul>
   </section>
   <section class="kg-card" id="extended">
-    <h2>GFS extended MOS (MEX)</h2>
-    <p class="kg-note">GFSX MOS guidance out to 8 days, every 12 hours, as NWS publishes it, from <b data-draw="mex-run" data-source="mex" data-field="run">—</b>. The last column is climatology: the normal low and high.</p>
+    <h2>Extended guidance</h2>
+    <p class="kg-note">Every 12 hours out to day 8. All three tables use the MEX valid times, so each column lines up straight down.</p>
+    <h3 class="kg-ext-h">GFS extended MOS (MEX) <span class="kg-ext-run" data-draw="mex-run" data-source="mex" data-field="run">—</span></h3>
     <div class="kg-scroll dash-skeleton" data-draw="mex" data-source="mex"></div>
+    <h3 class="kg-ext-h">ECMWF <span class="kg-ext-run">raw model,</span> <span class="kg-ext-run" data-draw="ext-run" data-model="ECMWF" data-source="ext">—</span></h3>
+    <div class="kg-scroll dash-skeleton" data-draw="ext" data-model="ECMWF" data-source="ext mex"></div>
+    <h3 class="kg-ext-h">UKMET <span class="kg-ext-run">raw model,</span> <span class="kg-ext-run" data-draw="ext-run" data-model="UKMET" data-source="ext">—</span></h3>
+    <div class="kg-scroll dash-skeleton" data-draw="ext" data-model="UKMET" data-source="ext mex"></div>
     <ul class="kg-defs">
-      <li><b>X/N</b> max (at 00Z) and min (at 12Z), °F; 12Z runs list the min first as <b>N/X</b>. <b>CLD</b> CL, PC (partly cloudy), OV. <b>WND</b> max wind in the 12 hours, knots.</li>
-      <li><b>P12</b>, <b>P24</b> chance of at least .01 in over 12 and 24 hours, percent. <b>Q12</b>, <b>Q24</b> QPF category, as in the bulletin above.</li>
-      <li><b>T12</b>, <b>T24</b> thunder chance, percent. <b>PZP</b>, <b>PSN</b>, <b>PRS</b> chance of freezing precipitation, snow, and a rain/snow mix if precipitation falls. <b>TYP</b> most likely type.</li>
+      <li><b>X/N</b> max (at 00Z) and min (at 12Z), °F; 12Z MEX runs list the min first as <b>N/X</b>. <b>CLD</b> CL, PC (partly cloudy), OV. <b>WND</b> max wind in the 12 hours, knots. <b>CLIMO</b> normal low and high.</li>
+      <li><b>P12</b>, <b>P24</b> chance of rain over 12 and 24 hours, percent: MOS uses at least .01 in; for ECMWF and UKMET it is the share of ensemble members with at least .05 in. <b>Q12</b>, <b>Q24</b> QPF category, as in the bulletin above.</li>
+      <li><b>T12</b>, <b>T24</b> thunder chance, percent (MEX only). <b>CAP</b> ECMWF and UKMET max CAPE in the 12 hours, hundreds of J/kg. <b>PZP</b>, <b>PSN</b>, <b>PRS</b> chance of freezing precipitation, snow, and a rain/snow mix if precipitation falls. <b>TYP</b> most likely type; "-" when the model is dry.</li>
+      <li>ECMWF and UKMET use their latest 00Z or 12Z runs, since their 06Z and 18Z runs stop short of day 8. UKMET's run reaches about 7 days, so its last columns can be empty.</li>
     </ul>
   </section>
 </div>
@@ -635,23 +643,9 @@ dash.draw('chg', (el) => {
 });
 </script>
 <script>
-dash.draw('mex-run', (el) => {
-  const d = dash.data('mex');
-  const r = d.status === 'ok' && d.data[0];
-  el.textContent = r ? d3.utcFormat('the %HZ %b %-d run')(new Date(r.run)) : '—';
-});
-
-dash.draw('mex', (el) => {
-  const d = dash.data('mex');
-  el.classList.toggle('dash-skeleton', d.status === 'loading');
-  el.replaceChildren();
-  if (d.status === 'error') return KG.fail(el);
-  if (d.status !== 'ok' || !d.data.length) return;
-  const rows = d.data;
-  const cols = Array.from(new Set(rows.filter((r) => r.valid !== 'CLIMO').map((r) => r.valid))).sort();
+KG.extTable = (rows, cols, src, order) => {
   const idx = new Map(rows.map((r) => [r.element + '|' + r.valid, r]));
-  const order = [];
-  rows.forEach((r) => { if (!order.includes(r.element)) order.push(r.element); });
+  const present = order.filter((e) => rows.some((r) => r.element === e));
   const hasClimo = rows.some((r) => r.valid === 'CLIMO');
   const firstXN = rows.filter((r) => r.element === 'XN' && r.valid !== 'CLIMO').map((r) => r.valid).sort()[0];
   const xnLabel = firstXN && firstXN.slice(11, 13) === '12' ? 'N/X' : 'X/N';
@@ -684,20 +678,62 @@ dash.draw('mex', (el) => {
     if (extra) td.classList.add(extra);
     if (r) {
       td.textContent = r.text;
-      td.dataset.source = 'mex'; td.dataset.field = 'text';
-      td.dataset.where = `element=${r.element}&valid=${c}`;
+      td.dataset.source = src; td.dataset.field = 'text';
+      td.dataset.where = (src === 'ext' ? `model=${r.model}&` : '') + `element=${r.element}&valid=${c}`;
       const v = Number(r.value);
       if (['P12', 'P24', 'T12', 'T24'].includes(r.element) && r.value !== null && v > 0) td.style.background = shade(v);
     }
     tr.append(td);
   };
-  order.forEach((elem, k) => {
+  present.forEach((elem) => {
     const tr = tbody.insertRow(); tr.className = 'kg-first';
     const a = document.createElement('td'); a.className = 'kg-el'; a.textContent = elem === 'XN' ? xnLabel : elem; tr.append(a);
     cols.forEach((c, j) => cell(tr, idx.get(elem + '|' + c), c, newDay(j) ? 'kg-day0' : null));
     if (hasClimo) cell(tr, idx.get(elem + '|CLIMO'), 'CLIMO', 'kg-climo');
   });
-  el.append(table);
+  return table;
+};
+
+KG.extCols = () => {
+  const m = dash.data('mex');
+  if (m.status === 'ok' && m.data.length) return Array.from(new Set(m.data.filter((r) => r.valid !== 'CLIMO').map((r) => r.valid))).sort();
+  const e = dash.data('ext');
+  return e.status === 'ok' ? Array.from(new Set(e.data.map((r) => r.valid))).sort() : [];
+};
+
+dash.draw('mex-run', (el) => {
+  const d = dash.data('mex');
+  const r = d.status === 'ok' && d.data[0];
+  el.textContent = r ? d3.utcFormat('%HZ %b %-d run')(new Date(r.run)) : '—';
+});
+
+dash.draw('ext-run', (el) => {
+  const d = dash.data('ext');
+  const r = d.status === 'ok' && d.data.find((x) => x.model === el.dataset.model);
+  const f = d3.utcFormat('%HZ %b %-d');
+  el.textContent = r ? `${f(new Date(r.run))} run; rain chances from its ${r.members}-member ensemble${r.ens_run ? ', ' + f(new Date(r.ens_run)) : ''}` : '—';
+});
+
+dash.draw('mex', (el) => {
+  const d = dash.data('mex');
+  el.classList.toggle('dash-skeleton', d.status === 'loading');
+  el.replaceChildren();
+  if (d.status === 'error') return KG.fail(el);
+  if (d.status !== 'ok' || !d.data.length) return;
+  const order = [];
+  d.data.forEach((r) => { if (!order.includes(r.element)) order.push(r.element); });
+  el.append(KG.extTable(d.data, KG.extCols(), 'mex', order));
+});
+
+dash.draw('ext', (el) => {
+  const d = dash.data('ext');
+  el.classList.toggle('dash-skeleton', d.status === 'loading');
+  el.replaceChildren();
+  if (d.status === 'error') return KG.fail(el);
+  if (d.status !== 'ok') return;
+  const rows = d.data.filter((r) => r.model === el.dataset.model);
+  if (!rows.length) return;
+  el.append(KG.extTable(rows, KG.extCols(), 'ext', ['XN', 'TMP', 'DPT', 'CLD', 'WND', 'P12', 'P24', 'Q12', 'Q24', 'CAP', 'TYP']));
 });
 </script>
 

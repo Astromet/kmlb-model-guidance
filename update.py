@@ -10,6 +10,7 @@ and writes
   data/models.json    latest runs, one row per model / element / valid time
   data/previous.json  wind, gusts and P12 from each model's run 12 hours earlier
   data/mex.json       GFS extended MOS (MEX), latest run, 12-hourly to day 8, with climatology
+  data/ext.json       ECMWF and UKMET extended (raw model), on the MEX valid times
   data/ndfd.json      NWS official forecast (NDFD grid): wind, gusts and P12 at the station
   data/meta.json      when this ran and which runs it used
 
@@ -287,6 +288,115 @@ def fetch_mex(sta):
     return cur
 
 
+# ------------------------------------------------------------------ ECMWF and UKMET extended (raw model, MEX layout)
+EXT_MODELS = (
+    # name, deterministic model, ensemble model, ensemble meta key
+    ("ECMWF", "ecmwf_ifs025", "ecmwf_ifs025", "ecmwf_ifs025_ensemble"),
+    ("UKMET", "ukmo_global_deterministic_10km", "ukmo_global_ensemble_20km", "ukmo_global_ensemble_20km"),
+)
+
+
+def long_run(model, lat, lon, now):
+    """Latest 00Z or 12Z run (the 06Z/18Z runs stop short of day 8)."""
+    t = now.replace(minute=0, second=0, microsecond=0)
+    t -= timedelta(hours=t.hour % 12)
+    for _ in range(6):
+        r = get(f"{SR}?latitude={lat}&longitude={lon}&models={model}&hourly=temperature_2m"
+                f"&forecast_days=1&run={iso(t)}", tries=1)
+        if r and '"hourly"' in r:
+            return t
+        t -= timedelta(hours=12)
+    return None
+
+
+def cld3(p):
+    """Cloud cover % to the MEX categories: CL (0-2 octas), PC (3-4), OV (5-8)."""
+    if p is None: return None
+    return "CL" if p < 32 else "PC" if p < 69 else "OV"
+
+
+def extended(cols, lat, lon, now, rows, meta):
+    for name, det_model, ens_model, ens_key in EXT_MODELS:
+        run = long_run(det_model, lat, lon, now)
+        if not run:
+            print(f"warning: no {name} 00Z/12Z run found", file=sys.stderr)
+            continue
+        det = get_json(f"{SR}?latitude={lat}&longitude={lon}&models={det_model}&timezone=GMT&forecast_days=10"
+                       "&wind_speed_unit=kn&temperature_unit=fahrenheit&precipitation_unit=inch"
+                       f"&run={iso(run)}&hourly=temperature_2m,dew_point_2m,cloud_cover,wind_speed_10m,"
+                       "precipitation,snowfall,cape")
+        ens = get_json(f"{ENS}?latitude={lat}&longitude={lon}&models={ens_model}&hourly=precipitation"
+                       "&precipitation_unit=inch&timezone=GMT&past_days=1&forecast_days=10")
+        em = get_json(f"https://ensemble-api.open-meteo.com/data/{ens_key}/static/meta.json")
+        if not det:
+            continue
+        ens_run = iso(datetime.fromtimestamp(em["last_run_initialisation_time"], UTC)) + "Z" if em else None
+        meta[f"{name} extended"] = iso(run) + "Z"
+        if ens_run:
+            meta[f"{name} extended ENS"] = ens_run
+        H = det["hourly"]
+        idx = {t: i for i, t in enumerate(H["time"])}
+        E = ens["hourly"] if ens else {"time": []}
+        eidx = {t: i for i, t in enumerate(E["time"])}
+        members = [k for k in E if k.startswith("precipitation")]
+
+        def win(arr, ix, end, h):
+            out = []
+            for k in range(h):
+                i = ix.get(iso(end - timedelta(hours=k)))
+                if i is None or arr[i] is None:
+                    return None
+                out.append(arr[i])
+            return out
+
+        def add(c, el, value, text=None):
+            rows.add(name, run, c, el, value, text)
+            if ens_run:
+                rows[-1]["ens_run"] = ens_run
+            rows[-1]["members"] = len(members)
+
+        for c in cols:
+            i = idx.get(iso(c))
+            if i is None or H["temperature_2m"][i] is None:
+                continue
+            w = win(H["temperature_2m"], idx, c, 13)
+            if w:
+                add(c, "XN", round(max(w) if c.hour == 0 else min(w)))
+            add(c, "TMP", round(H["temperature_2m"][i]))
+            if H["dew_point_2m"][i] is not None:
+                add(c, "DPT", round(H["dew_point_2m"][i]))
+            if H["cloud_cover"][i] is not None:
+                add(c, "CLD", H["cloud_cover"][i], cld3(H["cloud_cover"][i]))
+            w = win(H["wind_speed_10m"], idx, c, 12)
+            if w:
+                add(c, "WND", round(max(w)), str(round(max(w))))
+            for h in (12, 24):
+                if h == 24 and c.hour != 0:
+                    continue
+                tot = wet = 0
+                for m in members:
+                    sv = win(E[m], eidx, c, h)
+                    if sv is not None:
+                        tot += 1
+                        wet += sum(sv) >= 0.0495  # share of members with >= 0.05 in
+                if tot:
+                    add(c, f"P{h}", round(100 * wet / tot))
+            for h in (12, 24):
+                if h == 24 and c.hour != 0:
+                    continue
+                w = win(H["precipitation"], idx, c, h)
+                if w is not None:
+                    cat = qcat(round(sum(w) * 100))
+                    add(c, f"Q{h}", cat, str(cat))
+            if "cape" in H:
+                w = win(H["cape"], idx, c, 12)
+                if w:
+                    add(c, "CAP", max(w), str(round(max(w) / 100)))
+            p12, s12 = win(H["precipitation"], idx, c, 12), win(H["snowfall"], idx, c, 12)
+            if p12 is not None:
+                add(c, "TYP", None, "-" if sum(p12) < 0.005 else ("S" if s12 and sum(s12) > 0 else "R"))
+
+
 # ------------------------------------------------------------------ ECMWF
 def iso(t):
     return t.strftime("%Y-%m-%dT%H:%M")
@@ -500,6 +610,19 @@ def main():
     else:
         print(f"warning: no GFS MEX bulletin for {sta}", file=sys.stderr)
 
+    extr = Rows()
+    cols = sorted({datetime.strptime(r["valid"], "%Y-%m-%dT%H:%MZ").replace(tzinfo=UTC)
+                   for r in mexr if r["valid"] != "CLIMO"})
+    if not cols:  # no MEX: 00Z/12Z from tomorrow out to day 8
+        t0 = (now + timedelta(hours=12)).replace(minute=0, second=0, microsecond=0)
+        while t0.hour % 12:
+            t0 += timedelta(hours=1)
+        cols = [t0 + timedelta(hours=12 * k) for k in range(15)]
+    try:
+        extended(cols, a.lat, a.lon, now, extr, meta)
+    except Exception as e:
+        print(f"warning: extended ECMWF/UKMET failed: {e}", file=sys.stderr)
+
     nws = Rows()
     try:
         ndfd(a.lat, a.lon, nws, meta)
@@ -515,11 +638,13 @@ def main():
         json.dump({"rows": prev}, f, separators=(",", ":"))
     with open(os.path.join(a.out, "mex.json"), "w") as f:
         json.dump({"rows": mexr}, f, separators=(",", ":"))
+    with open(os.path.join(a.out, "ext.json"), "w") as f:
+        json.dump({"rows": extr}, f, separators=(",", ":"))
     with open(os.path.join(a.out, "ndfd.json"), "w") as f:
         json.dump({"rows": nws}, f, separators=(",", ":"))
     with open(os.path.join(a.out, "meta.json"), "w") as f:
         json.dump({"station": sta, "generated": now.strftime("%Y-%m-%dT%H:%MZ"), "runs": meta}, f, indent=1)
-    print(f"{len(rows)} rows, {len(prev)} prior rows, {len(nws)} NWS rows, {len(mexr)} MEX rows; runs: {meta}")
+    print(f"{len(rows)} rows, {len(prev)} prior rows, {len(nws)} NWS rows, {len(mexr)} MEX rows, {len(extr)} extended rows; runs: {meta}")
 
 
 if __name__ == "__main__":
