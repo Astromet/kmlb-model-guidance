@@ -1,0 +1,20 @@
+{
+ "station": "KMLB",
+ "generated": "2026-11-14T11:14Z",
+ "runs": {
+  "GFS MOS": "2026-11-14T06:00Z",
+  "GFS MOS prior": "2026-11-13T18:00Z",
+  "NBM": "2026-11-14T07:00Z",
+  "NBM prior": "2026-11-13T19:00Z",
+  "ECMWF": "2026-11-14T00:00Z",
+  "ECMWF ENS": "2026-11-13T12:00Z",
+  "ECMWF prior": "2026-11-13T12:00Z",
+  "GFS MEX": "2026-11-14T00:00Z",
+  "ECMWF extended": "2026-11-14T00:00Z",
+  "ECMWF extended ENS": "2026-11-13T12:00Z",
+  "UKMET extended": "2026-11-14T00:00Z",
+  "UKMET extended ENS": "2026-11-14T00:00Z",
+  "NWS": "2026-11-14T10:14Z",
+  "NWS grid": "MLB 56,52"
+ }
+}
