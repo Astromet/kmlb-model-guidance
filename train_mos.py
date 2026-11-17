@@ -241,11 +241,12 @@ def forward_select(X, y, names):
     A = np.column_stack([X[:, chosen], np.ones(n)])
     coef, *_ = np.linalg.lstsq(A, y, rcond=None)
     return {"t": [names[j] for j in chosen], "c": [round(float(c), 6) for c in coef[:-1]],
-            "b": round(float(coef[-1]), 6), "n": n, "r2": round(best_r2, 4)}
+            "b": round(float(coef[-1]), 6), "n": n, "r2": round(best_r2, 4),
+            "r": [[round(float(X[:, j].min()), 4), round(float(X[:, j].max()), 4)] for j in chosen]}
 
 
 def fit(rows):
-    names = [k for k in rows[0][1] if k != "RAW"]
+    names = [k for k in rows[0][1] if k not in mos.NOT_OFFERED]
     X = np.array([[x[k] for k in names] for _, x, _ in rows], dtype=float)
     y = np.array([o for _, _, o in rows], dtype=float)
     return forward_select(X, y, names)
@@ -278,10 +279,12 @@ def score(data, eqs, cutoff):
                     continue
                 m = mos.apply(eq, x)
                 if el in mos.PROB:
-                    m = min(1.0, max(0.0, m))
+                    m = min(mos.PROB_MAX, max(0.0, m))
                     r_err, m_err = (x["RAW"] - o) ** 2, (m - o) ** 2
                     clim.append((base - o) ** 2)
                 else:
+                    if abs(m - x["RAW"]) > mos.GUARD[el]:
+                        m = x["RAW"]  # same fallback as the live forecasts
                     r_err, m_err = abs(x["RAW"] - o), abs(m - o)
                 raw_e.append(r_err)
                 mos_e.append(m_err)

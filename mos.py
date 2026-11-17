@@ -87,8 +87,10 @@ def predictors(series, t, element):
             return None
         u, v = _uv(ws, wd)
         raw = {"TMP": T, "DPT": D, "WSP": ws}[element]
+        p6 = max(sum(pr6), 0.0)
         return {"RAW": raw, "T": T, "TD": D, "DEP": T - D, "RH": rh, "WS": ws, "U": u, "V": v,
-                "CC": cc, "MSL": msl, "P6": sum(pr6), "T-3": Tm3, "T+3": Tp3, "S1": s1, "C1": c1}
+                "CC": cc, "MSL": msl, "P6": p6, "SP6": math.sqrt(min(p6, 2.0)), "T-3": Tm3, "T+3": Tp3,
+                "S1": s1, "C1": c1}
     if element == "XN":
         T = _vals(series, "t2m", t, 13)
         D, ws, wd, cc = (_vals(series, k, t, 13) for k in ("td", "ws", "wd", "cc"))
@@ -116,9 +118,24 @@ def predictors(series, t, element):
     raise ValueError(element)
 
 
+# Predictors offered to forward selection (P6 stays computable for older equations, but its
+# leverage on heavy-rain outliers is too large, so new equations use SP6 = sqrt of 6-h rain).
+NOT_OFFERED = {"RAW", "P6"}
+GUARD = {"TMP": 15, "DPT": 15, "XN": 15, "WSP": 12}  # keep raw if MOS strays further than this
+PROB_MAX = 0.98
+
+
 def apply(eq, x):
-    """Evaluate one equation {'t': terms, 'c': coefs, 'b': intercept} on predictor dict x."""
-    return eq["b"] + sum(c * x[t] for t, c in zip(eq["t"], eq["c"]))
+    """Evaluate one equation {'t': terms, 'c': coefs, 'b': intercept, 'r': [[lo, hi], ...]} on predictor
+    dict x. Each predictor is held to the range it had in training, as MOS does."""
+    rng = eq.get("r") or [None] * len(eq["t"])
+    total = eq["b"]
+    for t, c, r in zip(eq["t"], eq["c"], rng):
+        v = x[t]
+        if r:
+            v = min(max(v, r[0]), r[1])
+        total += c * v
+    return total
 
 
 def find_eq(coefs, model, element, day, hour):
@@ -141,7 +158,9 @@ def forecast(coefs, model, element, series, t, lead_hours):
         return None
     v = apply(eq, x)
     if element in PROB:
-        return max(0, min(100, round(100 * v)))
+        return max(0, min(round(100 * PROB_MAX), round(100 * v)))
+    if abs(v - x["RAW"]) > GUARD[element]:
+        return None  # implausible; the caller keeps the raw value
     if element == "WSP":
         return max(0, round(v))
     return round(v)
