@@ -249,7 +249,7 @@ window.dash = (() => {
   </section>
   <section class="kg-card" id="mos-verification">
     <h2>ECMWF and UKMET MOS verification</h2>
-    <p class="kg-note">How the KMLB-trained MOS did on the <b data-draw="mv-days" data-source="mosverif">—</b>, which were held out of training, compared with the raw model at the same lead times. Mean absolute error for TMP, DPT and X/N (°F) and WSP (kt); Brier score for rain chances, where lower is better and climatology is the score for always forecasting the usual frequency. Equations retrain weekly; these were trained <b data-draw="mv-trained" data-source="mosverif">—</b>.</p>
+    <p class="kg-note">How the KMLB-trained MOS did on the <b data-draw="mv-days" data-source="mosverif">—</b>, which were held out of training, compared with the raw model at the same lead times. Mean absolute error for TMP, DPT and X/N (°F) and WSP (kt); Brier score for rain chances, where lower is better: the raw model is scored on its own yes or no for measurable rain, and climatology on always forecasting the usual frequency. Equations retrain weekly; these were trained <b data-draw="mv-trained" data-source="mosverif">—</b>.</p>
     <div class="kg-scroll kg-mv dash-skeleton" data-draw="mv" data-source="mosverif"></div>
   </section>
 </div>
