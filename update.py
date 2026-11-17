@@ -6,6 +6,7 @@ Fetches the latest and the 12-hours-earlier runs of
   * GFS MOS (MAV)                          - weather.gov MDL text bulletins
   * NBM v5 NBS                             - weather.gov MDL text bulletins
   * ECMWF IFS 0.25 (deterministic) + ENS   - Open-Meteo
+  * UKMET global 10 km + MOGREPS-G         - Open-Meteo
 and writes
   data/models.json    latest runs, one row per model / element / valid time
   data/previous.json  wind, gusts and P12 from each model's run 12 hours earlier
@@ -450,16 +451,23 @@ def extended(cols, lat, lon, now, rows, meta):
             meta[f"{name} extended MOS"] = COEFS.get("trained")
 
 
-# ------------------------------------------------------------------ ECMWF
+# ------------------------------------------------------------------ ECMWF and UKMET bulletin
 def iso(t):
     return t.strftime("%Y-%m-%dT%H:%M")
 
 
-def ecmwf_latest_run(lat, lon, now):
+BULLETIN_MODELS = (
+    # name, deterministic model, ensemble model, ensemble meta.json key
+    ("ECMWF", "ecmwf_ifs025", "ecmwf_ifs025", "ecmwf_ifs025_ensemble"),
+    ("UKMET", "ukmo_global_deterministic_10km", "ukmo_global_ensemble_20km", "ukmo_global_ensemble_20km"),
+)
+
+
+def latest_run(det_model, lat, lon, now):
     t = now.replace(minute=0, second=0, microsecond=0)
     t -= timedelta(hours=t.hour % 6)
     for _ in range(8):
-        r = get(f"{SR}?latitude={lat}&longitude={lon}&models=ecmwf_ifs025&hourly=temperature_2m"
+        r = get(f"{SR}?latitude={lat}&longitude={lon}&models={det_model}&hourly=temperature_2m"
                 f"&forecast_days=1&run={iso(t)}", tries=1)
         if r and '"hourly"' in r:
             return t
@@ -467,22 +475,23 @@ def ecmwf_latest_run(lat, lon, now):
     return None
 
 
-def ecmwf(lat, lon, now, rows, prev_rows, meta):
-    run = ecmwf_latest_run(lat, lon, now)
+def bulletin_model(M, det_model, ens_model, ens_key, lat, lon, now, rows, prev_rows, meta):
+    """ECMWF or UKMET in the 3-hourly bulletin layout, with KMLB-trained MOS where it exists."""
+    run = latest_run(det_model, lat, lon, now)
     if not run:
-        print("warning: no ECMWF run found", file=sys.stderr)
+        print(f"warning: no {M} run found", file=sys.stderr)
         return
-    q = (f"latitude={lat}&longitude={lon}&models=ecmwf_ifs025&timezone=GMT&forecast_days=5"
+    q = (f"latitude={lat}&longitude={lon}&models={det_model}&timezone=GMT&forecast_days=5"
          "&wind_speed_unit=kn&temperature_unit=fahrenheit&precipitation_unit=inch")
     det = get_json(f"{SR}?{q}&run={iso(run)}&hourly=temperature_2m,dew_point_2m,cloud_cover,"
                    "wind_direction_10m,wind_speed_10m,wind_gusts_10m,precipitation,snowfall,cape,"
                    "pressure_msl,relative_humidity_2m")
-    ens = get_json(f"{ENS}?latitude={lat}&longitude={lon}&models=ecmwf_ifs025&hourly=precipitation"
+    ens = get_json(f"{ENS}?latitude={lat}&longitude={lon}&models={ens_model}&hourly=precipitation"
                    "&precipitation_unit=inch&timezone=GMT&past_days=1&forecast_days=5")
-    em = get_json(ENS_META)
-    meta["ECMWF"] = iso(run) + "Z"
+    em = get_json(f"https://ensemble-api.open-meteo.com/data/{ens_key}/static/meta.json")
+    meta[M] = iso(run) + "Z"
     if em:
-        meta["ECMWF ENS"] = iso(datetime.fromtimestamp(em["last_run_initialisation_time"], UTC)) + "Z"
+        meta[f"{M} ENS"] = iso(datetime.fromtimestamp(em["last_run_initialisation_time"], UTC)) + "Z"
     if not det:
         return
     H = det["hourly"]
@@ -490,6 +499,7 @@ def ecmwf(lat, lon, now, rows, prev_rows, meta):
     E = ens["hourly"] if ens else {"time": []}
     eidx = {t: i for i, t in enumerate(E["time"])}
     members = [k for k in E if k.startswith("precipitation")]
+    col = lambda k: H.get(k) or [None] * len(H["time"])
 
     def win(arr, ix, end, h):
         out = []
@@ -503,17 +513,16 @@ def ecmwf(lat, lon, now, rows, prev_rows, meta):
     start = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
     while start.hour % 3:
         start += timedelta(hours=1)
-    M = "ECMWF"
     for j in range(27):
         c = start + timedelta(hours=3 * j)
         i = idx.get(iso(c))
         if i is None:
             continue
-        vals = [H[k][i] for k in ("temperature_2m", "dew_point_2m", "cloud_cover",
-                                  "wind_direction_10m", "wind_speed_10m", "wind_gusts_10m")]
+        vals = [col(k)[i] for k in ("temperature_2m", "dew_point_2m", "cloud_cover", "wind_direction_10m", "wind_speed_10m")]
         if any(v is None for v in vals):
             continue
-        tmp, dpt, sky, wdr, wsp, gst = vals
+        tmp, dpt, sky, wdr, wsp = vals
+        gst = col("wind_gusts_10m")[i]
         if c.hour in (0, 12):
             w = win(H["temperature_2m"], idx, c, 13)
             if w:
@@ -524,14 +533,15 @@ def ecmwf(lat, lon, now, rows, prev_rows, meta):
         d = round(wdr / 10) % 36 or 36
         rows.add(M, run, c, "WDR", d * 10, f"{d:02d}")
         rows.add(M, run, c, "WSP", round(wsp), f"{round(wsp):02d}")
-        rows.add(M, run, c, "GST", round(gst), f"{round(gst):02d}")
-        p3, s3 = win(H["precipitation"], idx, c, 3), win(H["snowfall"], idx, c, 3)
+        if gst is not None:
+            rows.add(M, run, c, "GST", round(gst), f"{round(gst):02d}")
+        p3, s3 = win(col("precipitation"), idx, c, 3), win(col("snowfall"), idx, c, 3)
         if p3 is not None:
             rows.add(M, run, c, "TYP", None, "-" if sum(p3) < 0.005 else ("S" if s3 and sum(s3) > 0 else "R"))
         for h, ok in ((6, c.hour % 6 == 0), (12, c.hour % 12 == 0)):
             if not ok:
                 continue
-            w = win(H["precipitation"], idx, c, h)
+            w = win(col("precipitation"), idx, c, h)
             if w is not None:
                 cat = qcat(round(sum(w) * 100))
                 rows.add(M, run, c, f"Q{h:02d}", cat, str(cat))
@@ -544,25 +554,28 @@ def ecmwf(lat, lon, now, rows, prev_rows, meta):
             if tot:
                 rows.add(M, run, c, f"P{h:02d}", round(100 * wet / tot))
             if h == 6:
-                cp = win(H["cape"], idx, c, 6)
+                cp = win(col("cape"), idx, c, 6)
                 if cp:
                     rows.add(M, run, c, "CAP", max(cp), str(round(max(cp) / 100)))
     if apply_mos(rows, M, run, mos_series(H)):
-        meta["ECMWF MOS"] = COEFS.get("trained")
+        meta[f"{M} MOS"] = COEFS.get("trained")
     # the run 12 hours earlier: wind and gusts (wind through MOS too, so the change charts compare like with like)
     prior = run - timedelta(hours=12)
     pj = get_json(f"{SR}?{q}&run={iso(prior)}&hourly=wind_speed_10m,wind_gusts_10m,temperature_2m,dew_point_2m,"
                   "wind_direction_10m,cloud_cover,pressure_msl,relative_humidity_2m,precipitation")
     if pj:
-        meta["ECMWF prior"] = iso(prior) + "Z"
+        meta[f"{M} prior"] = iso(prior) + "Z"
         P = pj["hourly"]
+        G = P.get("wind_gusts_10m") or [None] * len(P["time"])
         for i, t in enumerate(P["time"]):
             v = datetime.fromisoformat(t).replace(tzinfo=UTC)
-            if v.hour % 3 or v < start or P["wind_speed_10m"][i] is None or P["wind_gusts_10m"][i] is None:
+            if v.hour % 3 or v < start or P["wind_speed_10m"][i] is None:
                 continue
-            w, g = round(P["wind_speed_10m"][i]), round(P["wind_gusts_10m"][i])
+            w = round(P["wind_speed_10m"][i])
             prev_rows.add(M, prior, v, "WSP", w, f"{w:02d}")
-            prev_rows.add(M, prior, v, "GST", g, f"{g:02d}")
+            if G[i] is not None:
+                g = round(G[i])
+                prev_rows.add(M, prior, v, "GST", g, f"{g:02d}")
         apply_mos(prev_rows, M, prior, mos_series(P))
 
 
@@ -655,10 +668,11 @@ def main():
         if pri:
             parse(pri, prev, prior_only)
             meta[name + " prior"] = run_time(pri).strftime("%Y-%m-%dT%H:%MZ")
-    try:
-        ecmwf(a.lat, a.lon, now, rows, prev, meta)
-    except Exception as e:  # keep the MOS data even if ECMWF fails
-        print(f"warning: ECMWF failed: {e}", file=sys.stderr)
+    for spec in BULLETIN_MODELS:
+        try:
+            bulletin_model(*spec, a.lat, a.lon, now, rows, prev, meta)
+        except Exception as e:  # keep the other models even if one fails
+            print(f"warning: {spec[0]} failed: {e}", file=sys.stderr)
 
     mexr = Rows()
     mex = fetch_mex(sta)
