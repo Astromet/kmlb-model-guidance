@@ -1,0 +1,36 @@
+name: Train MOS equations
+
+on:
+  schedule:
+    # Weekly, Sunday 07:20 UTC
+    - cron: "20 7 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: train-mos
+  cancel-in-progress: false
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install numpy
+      - name: Train ECMWF and UKMET MOS for KMLB
+        run: python3 train_mos.py
+      - name: Commit the new equations
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add mos/coefficients.json mos/verification.json
+          git diff --cached --quiet && exit 0
+          git commit -q -m "Retrain MOS equations $(date -u +%Y-%m-%d)"
+          git pull -q --rebase origin main
+          git push -q origin HEAD:main
