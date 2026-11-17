@@ -26,6 +26,8 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
+import mos
+
 UA = {"User-Agent": "kmlb-model-guidance (github.com/Astromet/kmlb-model-guidance)"}
 MDL = "https://www.weather.gov/source/mdl/"
 SR = "https://single-runs-api.open-meteo.com/v1/forecast"
@@ -288,6 +290,54 @@ def fetch_mex(sta):
     return cur
 
 
+# ------------------------------------------------------------------ KMLB-trained MOS for ECMWF and UKMET (see train_mos.py)
+try:
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "mos", "coefficients.json")) as _f:
+        COEFS = json.load(_f)
+except (OSError, ValueError):
+    COEFS = {}
+MOS_ELEMENTS = {"TMP", "DPT", "WSP", "XN", "P06", "P12", "P24"}
+
+
+def mos_series(hourly):
+    """Open-Meteo hourly block -> mos.py series."""
+    times = [datetime.fromisoformat(t).replace(tzinfo=UTC) for t in hourly["time"]]
+    out = {}
+    for key, var in mos.OM_VARS.items():
+        if var in hourly:
+            out[key] = {t: v for t, v in zip(times, hourly[var]) if v is not None}
+    return out
+
+
+def apply_mos(rows, model, run, series):
+    """Replace raw values with MOS where an equation exists; keep the raw value in 'raw'."""
+    if model not in COEFS.get("models", {}):
+        return 0
+    run_s = run.strftime("%Y-%m-%dT%H:%MZ")
+    n = 0
+    for r in rows:
+        if r["model"] != model or r["run"] != run_s or r["valid"] == "CLIMO":
+            continue
+        el = r["element"]
+        t = datetime.strptime(r["valid"], "%Y-%m-%dT%H:%MZ").replace(tzinfo=UTC)
+        lead = (t - run).total_seconds() / 3600
+        if el == "WND":  # extended: max of the 3-hourly MOS winds in the 12 hours
+            v = [mos.forecast(COEFS, model, "WSP", series, t - timedelta(hours=k), lead - k) for k in (0, 3, 6, 9)]
+            v = max(v) if None not in v else None
+        elif el in MOS_ELEMENTS:
+            v = mos.forecast(COEFS, model, el, series, t, lead)
+        else:
+            continue
+        if v is None:
+            continue
+        r["raw"] = r["value"]
+        r["value"] = v
+        r["text"] = f"{v:02d}" if el == "WSP" else str(v)
+        r["mos"] = True
+        n += 1
+    return n
+
+
 # ------------------------------------------------------------------ ECMWF and UKMET extended (raw model, MEX layout)
 EXT_MODELS = (
     # name, deterministic model, ensemble model, ensemble meta key
@@ -324,7 +374,7 @@ def extended(cols, lat, lon, now, rows, meta):
         det = get_json(f"{SR}?latitude={lat}&longitude={lon}&models={det_model}&timezone=GMT&forecast_days=10"
                        "&wind_speed_unit=kn&temperature_unit=fahrenheit&precipitation_unit=inch"
                        f"&run={iso(run)}&hourly=temperature_2m,dew_point_2m,cloud_cover,wind_speed_10m,"
-                       "precipitation,snowfall,cape")
+                       "wind_direction_10m,pressure_msl,relative_humidity_2m,precipitation,snowfall,cape")
         ens = get_json(f"{ENS}?latitude={lat}&longitude={lon}&models={ens_model}&hourly=precipitation"
                        "&precipitation_unit=inch&timezone=GMT&past_days=1&forecast_days=10")
         em = get_json(f"https://ensemble-api.open-meteo.com/data/{ens_key}/static/meta.json")
@@ -395,6 +445,9 @@ def extended(cols, lat, lon, now, rows, meta):
             p12, s12 = win(H["precipitation"], idx, c, 12), win(H["snowfall"], idx, c, 12)
             if p12 is not None:
                 add(c, "TYP", None, "-" if sum(p12) < 0.005 else ("S" if s12 and sum(s12) > 0 else "R"))
+        n = apply_mos(rows, name, run, mos_series(H))
+        if n:
+            meta[f"{name} extended MOS"] = COEFS.get("trained")
 
 
 # ------------------------------------------------------------------ ECMWF
@@ -422,7 +475,8 @@ def ecmwf(lat, lon, now, rows, prev_rows, meta):
     q = (f"latitude={lat}&longitude={lon}&models=ecmwf_ifs025&timezone=GMT&forecast_days=5"
          "&wind_speed_unit=kn&temperature_unit=fahrenheit&precipitation_unit=inch")
     det = get_json(f"{SR}?{q}&run={iso(run)}&hourly=temperature_2m,dew_point_2m,cloud_cover,"
-                   "wind_direction_10m,wind_speed_10m,wind_gusts_10m,precipitation,snowfall,cape")
+                   "wind_direction_10m,wind_speed_10m,wind_gusts_10m,precipitation,snowfall,cape,"
+                   "pressure_msl,relative_humidity_2m")
     ens = get_json(f"{ENS}?latitude={lat}&longitude={lon}&models=ecmwf_ifs025&hourly=precipitation"
                    "&precipitation_unit=inch&timezone=GMT&past_days=1&forecast_days=5")
     em = get_json(ENS_META)
@@ -493,9 +547,12 @@ def ecmwf(lat, lon, now, rows, prev_rows, meta):
                 cp = win(H["cape"], idx, c, 6)
                 if cp:
                     rows.add(M, run, c, "CAP", max(cp), str(round(max(cp) / 100)))
-    # the run 12 hours earlier: wind and gusts
+    if apply_mos(rows, M, run, mos_series(H)):
+        meta["ECMWF MOS"] = COEFS.get("trained")
+    # the run 12 hours earlier: wind and gusts (wind through MOS too, so the change charts compare like with like)
     prior = run - timedelta(hours=12)
-    pj = get_json(f"{SR}?{q}&run={iso(prior)}&hourly=wind_speed_10m,wind_gusts_10m")
+    pj = get_json(f"{SR}?{q}&run={iso(prior)}&hourly=wind_speed_10m,wind_gusts_10m,temperature_2m,dew_point_2m,"
+                  "wind_direction_10m,cloud_cover,pressure_msl,relative_humidity_2m,precipitation")
     if pj:
         meta["ECMWF prior"] = iso(prior) + "Z"
         P = pj["hourly"]
@@ -506,6 +563,7 @@ def ecmwf(lat, lon, now, rows, prev_rows, meta):
             w, g = round(P["wind_speed_10m"][i]), round(P["wind_gusts_10m"][i])
             prev_rows.add(M, prior, v, "WSP", w, f"{w:02d}")
             prev_rows.add(M, prior, v, "GST", g, f"{g:02d}")
+        apply_mos(prev_rows, M, prior, mos_series(P))
 
 
 # ------------------------------------------------------------------ NWS official forecast (NDFD grid)
@@ -642,6 +700,21 @@ def main():
         json.dump({"rows": extr}, f, separators=(",", ":"))
     with open(os.path.join(a.out, "ndfd.json"), "w") as f:
         json.dump({"rows": nws}, f, separators=(",", ":"))
+    # MOS verification (from the weekly training) as rows for the page
+    vrows = []
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "mos", "verification.json")) as f:
+            V = json.load(f)
+        for model, mv in V.get("models", {}).items():
+            for el, sc in mv.get("scores", {}).items():
+                vrows.append({"model": model, "element": el, "metric": "Brier" if el.startswith("P") else "MAE",
+                              "n": sc["n"], "raw": sc["raw"], "mos": sc["mos"], "climo": sc.get("climo"),
+                              "trained": V.get("trained"), "from": V["holdout"][0], "to": V["holdout"][1],
+                              "since": mv.get("from")})
+    except (OSError, ValueError, KeyError):
+        pass
+    with open(os.path.join(a.out, "mosverif.json"), "w") as f:
+        json.dump({"rows": vrows}, f, separators=(",", ":"))
     with open(os.path.join(a.out, "meta.json"), "w") as f:
         json.dump({"station": sta, "generated": now.strftime("%Y-%m-%dT%H:%MZ"), "runs": meta}, f, indent=1)
     print(f"{len(rows)} rows, {len(prev)} prior rows, {len(nws)} NWS rows, {len(mexr)} MEX rows, {len(extr)} extended rows; runs: {meta}")

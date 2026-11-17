@@ -67,7 +67,7 @@ window.dash = (() => {
   const start = async () => {
     w = window.innerWidth;
     redraw();
-    await Promise.all([load('models', 'data/models.json'), load('previous', 'data/previous.json'), load('meta', 'data/meta.json'), load('ndfd', 'data/ndfd.json'), load('mex', 'data/mex.json'), load('ext', 'data/ext.json')]);
+    await Promise.all([load('models', 'data/models.json'), load('previous', 'data/previous.json'), load('meta', 'data/meta.json'), load('ndfd', 'data/ndfd.json'), load('mex', 'data/mex.json'), load('ext', 'data/ext.json'), load('mosverif', 'data/mosverif.json')]);
     compute();
     redraw();
   };
@@ -122,6 +122,13 @@ window.dash = (() => {
 .kg-sw-inc{background:var(--kg-inc)}.kg-sw-dec{background:var(--kg-dec)}
 .kg-sw-sq{width:.7rem;height:.7rem;border-radius:2px}
 #extended .kg-scroll{min-height:0}
+.kg-mv{min-height:0}
+.kg-mvt{border-collapse:collapse;font-size:var(--cds-font-size-body);font-variant-numeric:tabular-nums}
+.kg-mvt th,.kg-mvt td{padding:4px 12px;text-align:right;border-bottom:1px solid var(--color-border-line);white-space:nowrap}
+.kg-mvt th{font-weight:var(--cds-font-weight-medium);color:var(--color-fg-muted)}
+.kg-mvt th:first-child,.kg-mvt td:first-child,.kg-mvt th:nth-child(2),.kg-mvt td:nth-child(2){text-align:left}
+.kg-mvt td.kg-good{color:var(--color-ok);font-weight:600}
+.kg-mvt td.kg-bad{color:var(--color-bad);font-weight:600}
 #extended .kg-ext-h{font-size:var(--cds-font-size-body);font-weight:var(--cds-font-weight-medium);margin:var(--cds-gap-sm) 0 0}
 #extended .kg-ext-run{font-weight:400;color:var(--color-fg-muted)}
 #extended .kg-bul .kg-climo{border-left:1px solid var(--color-border-line);padding-left:1ch;text-align:left;color:var(--color-fg-muted)}
@@ -217,11 +224,11 @@ window.dash = (() => {
     <div class="kg-scroll dash-skeleton" data-draw="grid"></div>
     <ul class="kg-defs">
       <li><b>X/N</b> max (at 00Z) and min (at 12Z), °F. <b>CLD</b> CL FW SC BK OV. <b>WDR</b> tens of degrees. <b>WSP</b>, <b>GST</b> knots.</li>
-      <li><b>P06</b>, <b>P12</b> chance of at least .01 in, percent. For ECMWF this is the share of its 51 ensemble members reaching .05 in, since the raw members drizzle a few hundredths almost every period.</li>
+      <li><b>P06</b>, <b>P12</b> chance of at least .01 in, percent.</li>
       <li><b>Q06</b>, <b>Q12</b> QPF category: 0 none, 1 .01–.09, 2 .10–.24, 3 .25–.49, 4 .50–.99, 5 1.00–1.99, 6 2.00+ in.</li>
       <li><b>T06</b>, <b>T12</b> thunder chance in percent; MOS also shows the severe chance after the slash. <b>CAP</b> ECMWF max CAPE, hundreds of J/kg; it stands in for thunder, which ECMWF's open data lacks.</li>
       <li><b>CIG</b> ceiling category 1–8 and <b>VIS</b> visibility category 1–7, as in MOS. ECMWF has neither.</li>
-      <li>GFS is MOS guidance; NBM is the National Blend; ECMWF is raw IFS model output, not statistically corrected. NAM MOS was retired in November 2026.</li>
+      <li>GFS is MOS guidance; NBM is the National Blend. ECMWF X/N, TMP, DPT, WSP, P06 and P12 are MOS trained on past ECMWF forecasts against KMLB observations; its other rows are raw IFS output. NAM MOS was retired in November 2026.</li>
     </ul>
   </section>
   <section class="kg-card" id="extended">
@@ -229,16 +236,21 @@ window.dash = (() => {
     <p class="kg-note">Every 12 hours out to day 8. All three tables use the MEX valid times, so each column lines up straight down.</p>
     <h3 class="kg-ext-h">GFS extended MOS (MEX) <span class="kg-ext-run" data-draw="mex-run" data-source="mex" data-field="run">—</span></h3>
     <div class="kg-scroll dash-skeleton" data-draw="mex" data-source="mex"></div>
-    <h3 class="kg-ext-h">ECMWF <span class="kg-ext-run">raw model,</span> <span class="kg-ext-run" data-draw="ext-run" data-model="ECMWF" data-source="ext">—</span></h3>
+    <h3 class="kg-ext-h">ECMWF <span class="kg-ext-run" data-draw="ext-run" data-model="ECMWF" data-source="ext">—</span></h3>
     <div class="kg-scroll dash-skeleton" data-draw="ext" data-model="ECMWF" data-source="ext mex"></div>
-    <h3 class="kg-ext-h">UKMET <span class="kg-ext-run">raw model,</span> <span class="kg-ext-run" data-draw="ext-run" data-model="UKMET" data-source="ext">—</span></h3>
+    <h3 class="kg-ext-h">UKMET <span class="kg-ext-run" data-draw="ext-run" data-model="UKMET" data-source="ext">—</span></h3>
     <div class="kg-scroll dash-skeleton" data-draw="ext" data-model="UKMET" data-source="ext mex"></div>
     <ul class="kg-defs">
       <li><b>X/N</b> max (at 00Z) and min (at 12Z), °F; 12Z MEX runs list the min first as <b>N/X</b>. <b>CLD</b> CL, PC (partly cloudy), OV. <b>WND</b> max wind in the 12 hours, knots. <b>CLIMO</b> normal low and high.</li>
-      <li><b>P12</b>, <b>P24</b> chance of rain over 12 and 24 hours, percent: MOS uses at least .01 in; for ECMWF and UKMET it is the share of ensemble members with at least .05 in. <b>Q12</b>, <b>Q24</b> QPF category, as in the bulletin above.</li>
+      <li><b>P12</b>, <b>P24</b> chance of at least .01 in over 12 and 24 hours, percent. <b>Q12</b>, <b>Q24</b> QPF category, as in the bulletin above (raw model for ECMWF and UKMET).</li>
       <li><b>T12</b>, <b>T24</b> thunder chance, percent (MEX only). <b>CAP</b> ECMWF and UKMET max CAPE in the 12 hours, hundreds of J/kg. <b>PZP</b>, <b>PSN</b>, <b>PRS</b> chance of freezing precipitation, snow, and a rain/snow mix if precipitation falls. <b>TYP</b> most likely type; "-" when the model is dry.</li>
-      <li>ECMWF and UKMET use their latest 00Z or 12Z runs, since their 06Z and 18Z runs stop short of day 8. UKMET's run reaches about 7 days, so its last columns can be empty.</li>
+      <li>ECMWF and UKMET X/N, TMP, DPT, WND, P12 and P24 are MOS trained on past forecasts against KMLB observations (see the verification below); CLD, Q12, Q24, CAP and TYP are raw model. Both use their latest 00Z or 12Z run, since the 06Z and 18Z runs stop short of day 8. UKMET's run reaches about 7 days, so its last columns can be empty.</li>
     </ul>
+  </section>
+  <section class="kg-card" id="mos-verification">
+    <h2>ECMWF and UKMET MOS verification</h2>
+    <p class="kg-note">How the KMLB-trained MOS did on the <b data-draw="mv-days" data-source="mosverif">—</b>, which were held out of training, compared with the raw model at the same lead times. Mean absolute error for TMP, DPT and X/N (°F) and WSP (kt); Brier score for rain chances, where lower is better and climatology is the score for always forecasting the usual frequency. Equations retrain weekly; these were trained <b data-draw="mv-trained" data-source="mosverif">—</b>.</p>
+    <div class="kg-scroll kg-mv dash-skeleton" data-draw="mv" data-source="mosverif"></div>
   </section>
 </div>
   <footer class="kg-foot">
@@ -711,7 +723,8 @@ dash.draw('ext-run', (el) => {
   const d = dash.data('ext');
   const r = d.status === 'ok' && d.data.find((x) => x.model === el.dataset.model);
   const f = d3.utcFormat('%HZ %b %-d');
-  el.textContent = r ? `${f(new Date(r.run))} run; rain chances from its ${r.members}-member ensemble${r.ens_run ? ', ' + f(new Date(r.ens_run)) : ''}` : '—';
+  const isMos = d.status === 'ok' && d.data.some((x) => x.model === el.dataset.model && x.mos);
+  el.textContent = !r ? '—' : isMos ? `MOS (KMLB-trained), ${f(new Date(r.run))} run` : `raw model, ${f(new Date(r.run))} run; rain chances from its ${r.members}-member ensemble${r.ens_run ? ', ' + f(new Date(r.ens_run)) : ''}`;
 });
 
 dash.draw('mex', (el) => {
@@ -734,6 +747,44 @@ dash.draw('ext', (el) => {
   const rows = d.data.filter((r) => r.model === el.dataset.model);
   if (!rows.length) return;
   el.append(KG.extTable(rows, KG.extCols(), 'ext', ['XN', 'TMP', 'DPT', 'CLD', 'WND', 'P12', 'P24', 'Q12', 'Q24', 'CAP', 'TYP']));
+});
+</script>
+
+<script>
+dash.draw('mv-days', (el) => {
+  const d = dash.data('mosverif'); const r = d.status === 'ok' && d.data[0];
+  el.textContent = r ? `last ${Math.round((new Date(r.to) - new Date(r.from)) / 864e5)} days (${d3.utcFormat('%b %-d')(new Date(r.from))} to ${d3.utcFormat('%b %-d')(new Date(r.to))})` : '—';
+});
+dash.draw('mv-trained', (el) => {
+  const d = dash.data('mosverif'); const r = d.status === 'ok' && d.data[0];
+  el.textContent = r ? d3.utcFormat('%b %-d, %Y')(new Date(r.trained)) : '—';
+});
+dash.draw('mv', (el) => {
+  const d = dash.data('mosverif');
+  el.classList.toggle('dash-skeleton', d.status === 'loading');
+  el.replaceChildren();
+  if (d.status === 'error') return KG.fail(el);
+  if (d.status !== 'ok' || !d.data.length) return;
+  const order = ['TMP', 'DPT', 'XN', 'WSP', 'P06', 'P12', 'P24'];
+  const rows = d.data.slice().sort((a, b) => a.model.localeCompare(b.model) || order.indexOf(a.element) - order.indexOf(b.element));
+  const t = document.createElement('table'); t.className = 'kg-mvt';
+  t.dataset.source = 'mosverif'; t.dataset.rowKey = 'model,element';
+  const hr = t.createTHead().insertRow();
+  [['model', 'Model'], ['element', 'Element'], ['metric', 'Score'], ['raw', 'Raw model'], ['mos', 'MOS'], [null, 'Change'], ['climo', 'Climatology'], ['n', 'Cases']].forEach(([f, label]) => {
+    const th = document.createElement('th'); th.textContent = label; if (f) th.dataset.field = f; hr.append(th);
+  });
+  const fmt = (r, v) => v === null || v === undefined ? '' : r.metric === 'Brier' ? v.toFixed(3) : v.toFixed(2);
+  const tb = t.createTBody();
+  let last = null;
+  rows.forEach((r) => {
+    const tr = tb.insertRow(); tr.dataset.key = `${encodeURIComponent(r.model)},${r.element}`;
+    const ch = r.raw ? (r.mos - r.raw) / r.raw : 0;
+    const cells = [r.model === last ? '' : r.model, r.element === 'XN' ? 'X/N' : r.element, r.metric, fmt(r, r.raw), fmt(r, r.mos),
+      `${ch <= 0 ? '−' : '+'}${Math.abs(Math.round(ch * 100))}%`, fmt(r, r.climo), d3.format(',')(r.n)];
+    cells.forEach((v, i) => { const td = tr.insertCell(); td.textContent = v; if (i === 5) td.className = ch < -0.005 ? 'kg-good' : ch > 0.005 ? 'kg-bad' : ''; });
+    last = r.model;
+  });
+  el.append(t);
 });
 </script>
 
