@@ -158,19 +158,27 @@ def fetch_previous_runs(om, start, end):
 
 
 def fetch_single_runs(om, start, end):
-    """[(run time, series)] for each available 00Z/12Z run."""
-    runs = []
-    t = start
+    """[(run time, series)] for each available 00Z/12Z run, downloaded a few at a time."""
+    from concurrent.futures import ThreadPoolExecutor
     names = ",".join(mos.OM_VARS.values())
+    times = []
+    t = start
     while t <= end:
+        times.append(t)
+        t += timedelta(hours=12)
+
+    def one(t):
         body = get(f"{SINGLE}?latitude={LAT}&longitude={LON}&models={om}&run={t:%Y-%m-%dT%H:%M}"
                    f"&forecast_days=9&hourly={names}{UNITS}", tries=2, pause=0.3)
         if body:
             j = json.loads(body)
             if "hourly" in j:
-                runs.append((t, parse_hourly(j)))
-        t += timedelta(hours=12)
-    log(f"  {om} single runs {start:%Y-%m-%d}..{end:%Y-%m-%d}: {len(runs)} runs")
+                return (t, parse_hourly(j))
+        return None
+
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        runs = [r for r in ex.map(one, times) if r]
+    log(f"  {om} single runs {start:%Y-%m-%d}..{end:%Y-%m-%d}: {len(runs)} of {len(times)} runs")
     return runs
 
 
